@@ -193,6 +193,12 @@ fun LoginGreetingScreen(navController: NavController) {
                     text = stringResource(R.string.community_guidelines),
                     url = "$STOAT_MARKETING/aup"
                 )
+                // Fork addition: entry point for connecting to a self-hosted instance
+                AnyLink(
+                    text = stringResource(R.string.self_hosted_link),
+                    action = { navController.navigate("login/selfhosted") },
+                    modifier = Modifier.testTag("self_hosted_link")
+                )
                 if (BuildConfig.DEBUG) {
                     AnyLink(
                         text = "Debug: Chucker",

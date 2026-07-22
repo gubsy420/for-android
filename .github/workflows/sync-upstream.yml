@@ -1,0 +1,89 @@
+# Fork addition: keeps this fork up to date with the official Stoat for-android repo
+# while retaining the self-hosted server functionality.
+#
+# - Runs daily (and on demand via the Actions tab).
+# - If upstream's dev branch has new commits, it merges them into this fork's dev.
+# - If the merge is clean, it is pushed directly.
+# - If there is a conflict (upstream touched one of the few files this fork modifies),
+#   it pushes upstream's state to an `upstream-sync` branch and opens a PR so the
+#   conflict can be resolved manually.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: https://github.com/stoatchat/for-android.git
+  UPSTREAM_BRANCH: dev
+  FORK_BRANCH: dev
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.FORK_BRANCH }}
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream "$UPSTREAM_BRANCH"
+
+      - name: Check for new upstream commits
+        id: check
+        run: |
+          BEHIND=$(git rev-list --count "HEAD..upstream/$UPSTREAM_BRANCH")
+          echo "behind=$BEHIND" >> "$GITHUB_OUTPUT"
+          echo "Upstream is $BEHIND commit(s) ahead"
+
+      - name: Merge upstream
+        id: merge
+        if: steps.check.outputs.behind != '0'
+        run: |
+          if git merge --no-edit "upstream/$UPSTREAM_BRANCH"; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push merged branch
+        if: steps.merge.outputs.result == 'merged'
+        run: git push origin "$FORK_BRANCH"
+
+      - name: Open conflict-resolution PR
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git checkout -B upstream-sync "upstream/$UPSTREAM_BRANCH"
+          git push -f origin upstream-sync
+
+          # Only open a PR if one is not already open for this branch
+          EXISTING=$(gh pr list --head upstream-sync --base "$FORK_BRANCH" --state open --json number --jq length)
+          if [ "$EXISTING" = "0" ]; then
+            gh pr create \
+              --head upstream-sync \
+              --base "$FORK_BRANCH" \
+              --title "Sync upstream (manual conflict resolution required)" \
+              --body "Automatic merge of upstream \`$UPSTREAM_BRANCH\` into this fork failed due to conflicts. Upstream has likely modified one of the files this fork patches (see FORK_NOTES.md for the list). Resolve the conflicts in this PR, making sure the self-hosted server functionality is retained, then merge."
+          else
+            echo "Conflict PR already open, branch updated."
+          fi

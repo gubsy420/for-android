@@ -1,0 +1,62 @@
+# Fork addition: builds a debug APK of the fork.
+#
+# Runs on demand, and automatically after a successful upstream sync so every
+# upstream update produces a fresh APK with self-hosted support included.
+#
+# Note: the checked-in google-services.json.example is used, so Firebase push
+# notifications are not functional in these CI builds. Provide repository
+# variables/secrets and a real google-services.json for production builds.
+name: Build fork APK
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Sync upstream"]
+    types: [completed]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # For workflow_run triggers, only build if the sync succeeded
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: dev
+          submodules: recursive
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create build configuration
+        run: |
+          cat > stoatbuild.properties <<'EOF'
+          build.debug.app_name=Stoat Self-Hosted (Debug)
+          sentry.dsn=
+          build.flavour_id=selfhosted-fork
+          sentry.upload_mappings=false
+          EOF
+          if [ ! -f app/google-services.json ]; then
+            cp app/google-services.json.example app/google-services.json
+          fi
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: Archive debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          retention-days: 14
+          path: app/build/outputs/apk/debug/*.apk

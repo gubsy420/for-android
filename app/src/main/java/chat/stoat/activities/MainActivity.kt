@@ -88,6 +88,7 @@ import chat.stoat.c2dm.NotificationDeepLink
 import chat.stoat.composables.generic.HealthAlert
 import chat.stoat.composables.voice.VoicePermissionSwitch
 import chat.stoat.composables.voice.VoiceSheet
+import chat.stoat.core.model.data.EndpointConfig
 import chat.stoat.voice.VoiceCallManager
 import chat.stoat.core.model.schemas.HealthNotice
 import chat.stoat.material.EasingTokens
@@ -106,6 +107,7 @@ import chat.stoat.screens.labs.LabsRootScreen
 import chat.stoat.screens.login.LoginGreetingScreen
 import chat.stoat.screens.login.LoginScreen
 import chat.stoat.screens.login.MfaScreen
+import chat.stoat.screens.login.SelfHostedServerScreen
 import chat.stoat.screens.login2.InitScreen
 import chat.stoat.screens.main.MainScreen
 import chat.stoat.screens.register.OnboardingScreen
@@ -184,10 +186,14 @@ class MainActivityViewModel(
         viewModelScope.launch {
             Log.d("MainActivity", "Hydrating Experiments from KV")
             Experiments.hydrateWithKv()
-            Log.d("MainActivity", "Performing health check")
-            doHealthCheck()
-            Log.d("MainActivity", "Performing update geo state")
-            updateGeoState()
+            // Fork addition: health/geo are first-party services; skip them when
+            // pointed at a self-hosted instance
+            if (!EndpointConfig.isCustom) {
+                Log.d("MainActivity", "Performing health check")
+                doHealthCheck()
+                Log.d("MainActivity", "Performing update geo state")
+                updateGeoState()
+            }
         }
     }
 
@@ -579,6 +585,8 @@ fun AppEntrypoint(
 
                     composable("login/greeting") { LoginGreetingScreen(navController) }
                     composable("login/login") { LoginScreen(navController) }
+                    // Fork addition: self-hosted instance configuration
+                    composable("login/selfhosted") { SelfHostedServerScreen(navController) }
                     composable("login/mfa/{mfaTicket}/{allowedAuthTypes}") { backStackEntry ->
                         val mfaTicket = backStackEntry.arguments?.getString("mfaTicket") ?: ""
                         val allowedAuthTypes =

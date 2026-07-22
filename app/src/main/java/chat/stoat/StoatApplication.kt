@@ -6,12 +6,15 @@ import android.os.Build
 import android.os.StrictMode
 import chat.stoat.di.appModule
 import chat.stoat.di.viewModelModule
+import chat.stoat.persistence.KVStorage
+import chat.stoat.selfhost.SelfHostedEndpoints
 import coil3.ImageLoader
 import coil3.SingletonImageLoader
 import coil3.request.crossfade
 import com.google.android.material.color.DynamicColors
 import io.livekit.android.LiveKit
 import io.livekit.android.util.LoggingLevel
+import kotlinx.coroutines.runBlocking
 import logcat.AndroidLogcatLogger
 import logcat.LogPriority
 import org.koin.android.ext.koin.androidContext
@@ -35,6 +38,12 @@ class StoatApplication : Application(), SingletonImageLoader.Factory {
             androidContext(this@StoatApplication)
             androidLogger()
             modules(appModule, viewModelModule)
+        }
+
+        // Fork addition (self-hosted support): endpoints must be in place before any
+        // component makes network calls, hence the blocking read on startup.
+        runBlocking {
+            SelfHostedEndpoints.hydrate(KVStorage(this@StoatApplication))
         }
 
         if (BuildConfig.DEBUG) {

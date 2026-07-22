@@ -958,4 +958,16 @@
     <string name="changelog_header">What\'s new</string>
     <string name="changelog_load_error">There was an error loading the changelog.</string>
     <string name="changelog_retry">Retry</string>
+    <!-- Fork addition: self-hosted server support -->
+    <string name="self_hosted_link">Use a self-hosted server</string>
+    <string name="self_hosted_heading">Self-hosted server</string>
+    <string name="self_hosted_body">Connect this app to your own Stoat instance. Enter the URL of your instance\'s API and the remaining services will be discovered automatically.</string>
+    <string name="self_hosted_url_label">Instance API URL</string>
+    <string name="self_hosted_connect">Connect</string>
+    <string name="self_hosted_reset">Reset to official server</string>
+    <string name="self_hosted_current_official">Currently using the official Stoat server.</string>
+    <string name="self_hosted_current_custom">Currently using a self-hosted server: %1$s</string>
+    <string name="self_hosted_success">Connected to %1$s (API version %2$s). You can now log in or sign up.</string>
+    <string name="self_hosted_reset_success">Now using the official Stoat server.</string>
+    <string name="self_hosted_error_unreachable">Could not find a Stoat instance at this URL. Check the address and try again.</string>
 </resources>
