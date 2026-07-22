@@ -2,6 +2,8 @@
 #
 # Runs on demand, and automatically after a successful upstream sync so every
 # upstream update produces a fresh APK with self-hosted support included.
+# Syncs that brought no new commits skip the build (the "latest" release
+# already points at the current commit).
 #
 # Note: the checked-in google-services.json.example is used, so Firebase push
 # notifications are not functional in these CI builds. Provide repository
@@ -29,7 +31,24 @@ jobs:
           ref: dev
           submodules: recursive
 
+      - name: Check whether a build is needed
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          HEAD_SHA=$(git rev-parse HEAD)
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+          RELEASED_SHA=$(gh release view latest --json targetCommitish --jq .targetCommitish 2>/dev/null || echo none)
+          if [ "${{ github.event_name }}" = "workflow_run" ] && [ "$RELEASED_SHA" = "$HEAD_SHA" ]; then
+            echo "Release already built from $HEAD_SHA; skipping."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up JDK 21
+        if: steps.gate.outputs.build == 'true'
         uses: actions/setup-java@v4
         with:
           java-version: "21"
@@ -37,9 +56,11 @@ jobs:
           cache: gradle
 
       - name: Setup Android SDK
+        if: steps.gate.outputs.build == 'true'
         uses: android-actions/setup-android@v3
 
       - name: Create build configuration
+        if: steps.gate.outputs.build == 'true'
         run: |
           cat > stoatbuild.properties <<'EOF'
           build.debug.app_name=Stoat Self-Hosted (Debug)
@@ -55,17 +76,21 @@ jobs:
         # Runners generate a fresh debug keystore per run, which changes the APK
         # signature and breaks in-place updates on devices. Use the committed one
         # (standard Android debug passwords) so every build is update-compatible.
+        if: steps.gate.outputs.build == 'true'
         run: |
           mkdir -p ~/.android
           cp .github/debug.keystore ~/.android/debug.keystore
 
       - name: Grant execute permission for gradlew
+        if: steps.gate.outputs.build == 'true'
         run: chmod +x gradlew
 
       - name: Build with Gradle
+        if: steps.gate.outputs.build == 'true'
         run: ./gradlew --no-daemon assembleDebug
 
       - name: Archive debug APK
+        if: steps.gate.outputs.build == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: debug-apk
@@ -76,13 +101,15 @@ jobs:
         # Recreates the "latest" release on the current commit each build, so
         # https://github.com/<owner>/<repo>/releases/download/latest/app-debug.apk
         # is a stable download URL (and Obtainium-compatible).
+        if: steps.gate.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ steps.gate.outputs.head_sha }}
         run: |
           VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts || echo unknown)
           gh release delete latest --cleanup-tag --yes || true
           gh release create latest app/build/outputs/apk/debug/*.apk \
             --prerelease \
-            --target "$GITHUB_SHA" \
+            --target "$HEAD_SHA" \
             --title "Stoat $VERSION self-hosted fork ($(date -u +%Y-%m-%d))" \
-            --notes "Automated debug build of commit ${GITHUB_SHA::7} with self-hosted server support. Built $(date -u '+%Y-%m-%d %H:%M UTC')."
+            --notes "Automated debug build of commit ${HEAD_SHA::7} with self-hosted server support. Built $(date -u '+%Y-%m-%d %H:%M UTC')."
