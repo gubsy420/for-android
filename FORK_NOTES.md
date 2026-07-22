@@ -46,6 +46,21 @@ conflict can involve fork code):
 | `app/.../di/ViewModelModule.kt` | Registers `SelfHostedServerScreenViewModel` |
 | `app/src/main/res/values/strings.xml` | Adds `self_hosted_*` strings (appended at end of file) |
 
+## Downloading builds
+
+Every successful build publishes the APK to a rolling `latest` GitHub release, so the
+newest build is always at:
+
+```
+https://github.com/gubsy420/for-android/releases/download/latest/app-debug.apk
+```
+
+This URL also works with [Obtainium](https://github.com/ImranR98/Obtainium) for automatic
+updates on-device. Builds are debug builds signed with the committed `.github/debug.keystore`
+(standard Android debug passwords) so consecutive builds install as in-place updates.
+Note: because the keystore is public, treat these builds as personal-use; anyone can produce
+an APK with the same signature.
+
 ## Upstream sync automation
 
 `.github/workflows/sync-upstream.yml` runs daily (or manually from the Actions tab):
