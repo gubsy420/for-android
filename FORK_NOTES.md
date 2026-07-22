@@ -67,9 +67,14 @@ an APK with the same signature.
 
 - If upstream `dev` has new commits, they are merged into this fork's `dev`.
 - Clean merge → pushed automatically, and `build-fork.yml` then produces a fresh APK.
-- Merge conflict → the workflow pushes an `upstream-sync` branch and opens a PR against
-  `dev`. Resolve the conflict manually (the table above tells you exactly which fork changes
-  must be retained), then merge the PR.
+- Merge conflict → a second job hands the conflicted merge to Claude Code (authenticated
+  via the `CLAUDE_CODE_OAUTH_TOKEN` repo secret), which resolves it per this document. The
+  merge is only pushed if no conflict markers remain **and** the merged code compiles; an
+  issue is then opened on the repo (mentioning @gubsy420) summarizing what conflicted and
+  how it was resolved.
+- If automated resolution fails for any reason (missing token, unresolvable conflict,
+  compile failure), the workflow falls back to pushing an `upstream-sync` branch and opening
+  a PR against `dev` for manual resolution — the same behavior as before automation.
 
 ## Known limitations
 
