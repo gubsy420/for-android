@@ -36,6 +36,12 @@ jobs:
           echo "Patch applied:"
           grep -n "set_payload" "$FILE"
 
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          docker system prune -af
+          df -h /
+
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -44,7 +50,9 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build base image (all crates, patched)
-        run: docker build -t stoat-base-patched -f Dockerfile .
+        # Upstream's Dockerfile defaults to CARGO_BUILD_JOBS=10, which OOMs the
+        # 7 GB hosted runner; 2 jobs fits the 2-core runner.
+        run: docker build --build-arg CARGO_BUILD_JOBS=2 -t stoat-base-patched -f Dockerfile .
 
       - name: Build and push pushd image
         run: |
