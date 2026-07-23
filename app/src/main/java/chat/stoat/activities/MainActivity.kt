@@ -130,6 +130,7 @@ import chat.stoat.screens.settings.channel.ChannelSettingsHome
 import chat.stoat.screens.settings.channel.ChannelSettingsOverview
 import chat.stoat.screens.settings.channel.ChannelSettingsPermissions
 import chat.stoat.ui.theme.StoatTheme
+import chat.stoat.unifiedpush.UnifiedPushManager
 import com.google.android.material.color.DynamicColors
 import io.ktor.client.request.get
 import io.sentry.android.core.SentryAndroid
@@ -263,6 +264,8 @@ class MainActivityViewModel(
                     Log.d("MainActivity", "Onboarding state is complete, logging in")
                     StoatAPI.loginAs(token)
                     StoatAPI.setSessionId(id)
+                    // Fork addition: prefer UnifiedPush when a distributor is installed
+                    UnifiedPushManager.registerIfAvailable(context)
                     if (Experiments.usePolar.isEnabled) {
                         startWithDestination("main")
                     } else {

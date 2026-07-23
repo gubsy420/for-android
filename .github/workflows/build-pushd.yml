@@ -1,0 +1,55 @@
+# Fork addition: builds a patched Stoat backend pushd image with aes128gcm web
+# push encoding (required for UnifiedPush; see selfhost/README.md), and pushes
+# it to this fork owner's GHCR as ghcr.io/<owner>/pushd:<ref>-aes128gcm.
+#
+# Manual trigger only — run it when you deploy a new backend version.
+name: Build patched pushd image
+
+on:
+  workflow_dispatch:
+    inputs:
+      backend_ref:
+        description: "stoatchat/stoatchat tag or branch to build (match your compose version)"
+        required: true
+        default: "v0.13.8"
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out backend source
+        uses: actions/checkout@v4
+        with:
+          repository: stoatchat/stoatchat
+          ref: ${{ inputs.backend_ref }}
+
+      - name: Apply aes128gcm patch
+        run: |
+          FILE=crates/daemons/pushd/src/consumers/outbound/vapid.rs
+          grep -q "ContentEncoding::AesGcm" "$FILE" || { echo "Pattern not found — upstream changed, update this workflow"; exit 1; }
+          sed -i 's/ContentEncoding::AesGcm/ContentEncoding::Aes128Gcm/' "$FILE"
+          grep -q "ContentEncoding::Aes128Gcm" "$FILE"
+          echo "Patch applied:"
+          grep -n "set_payload" "$FILE"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build base image (all crates, patched)
+        run: docker build -t stoat-base-patched -f Dockerfile .
+
+      - name: Build and push pushd image
+        run: |
+          sed -i 's|ghcr.io/stoatchat/base:latest|stoat-base-patched|' crates/daemons/pushd/Dockerfile
+          IMAGE="ghcr.io/${{ github.repository_owner }}/pushd:${{ inputs.backend_ref }}-aes128gcm"
+          docker build -t "$IMAGE" -f crates/daemons/pushd/Dockerfile .
+          docker push "$IMAGE"
+          echo "Pushed $IMAGE"

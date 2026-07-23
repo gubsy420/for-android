@@ -31,8 +31,13 @@ upstream:
 | `core/model/.../data/EndpointConfig.kt` | Runtime-mutable endpoint config; official URLs as defaults |
 | `app/.../selfhost/SelfHostedEndpoints.kt` | Persistence (KVStorage/DataStore) + hydration |
 | `app/.../screens/login/SelfHostedServerScreen.kt` | The GUI flow (screen + ViewModel) |
+| `app/.../c2dm/PushMessageRenderer.kt` | Notification rendering, extracted from `HandlerService` so FCM and UnifiedPush share it |
+| `app/.../unifiedpush/StoatUnifiedPushService.kt` | UnifiedPush receiver: endpoint registration + payload parsing |
+| `app/.../unifiedpush/UnifiedPushManager.kt` | Auto-registers with a UnifiedPush distributor after login |
+| `selfhost/` | Backend patch + instructions for aes128gcm web push (UnifiedPush prerequisite) |
 | `.github/workflows/sync-upstream.yml` | Daily upstream sync automation |
 | `.github/workflows/build-fork.yml` | Debug APK builds |
+| `.github/workflows/build-pushd.yml` | Builds patched backend pushd image to GHCR |
 
 **Modified upstream files** (kept as small as possible — these are the only places a sync
 conflict can involve fork code):
@@ -45,6 +50,9 @@ conflict can involve fork code):
 | `app/.../screens/login/LoginGreetingScreen.kt` | Adds the "Use a self-hosted server" link |
 | `app/.../di/ViewModelModule.kt` | Registers `SelfHostedServerScreenViewModel` |
 | `app/src/main/res/values/strings.xml` | Adds `self_hosted_*` strings (appended at end of file) |
+| `app/.../c2dm/HandlerService.kt` | Notification rendering moved to `PushMessageRenderer` (FCM behavior unchanged); `generateLetterBitmap` made internal. Upstream changes to rendering logic must be applied to `PushMessageRenderer.render` instead |
+| `app/src/main/AndroidManifest.xml` | Adds the UnifiedPush service declaration |
+| `gradle/libs.versions.toml` + `app/build.gradle.kts` | Adds the `org.unifiedpush.android:connector` dependency |
 
 ## Downloading builds
 
@@ -81,8 +89,13 @@ an APK with the same signature.
 - Invite links generated in-app still use the official `stt.gg` domain; links to a
   self-hosted *web app* are recognized, `stt.gg`-style short links of other instances are not.
 - Terms/privacy/support/changelog links always point at official Stoat pages.
-- Push notifications require the instance to support the same FCM pipeline as the official
-  server, and a real `google-services.json` at build time.
+- Push notifications: FCM requires a real `google-services.json` at build time and a
+  backend configured for the same Firebase project. Alternatively the fork supports
+  **UnifiedPush** (Google-free): install a distributor app (e.g. ntfy) and run a backend
+  patched for aes128gcm web push — see [selfhost/README.md](selfhost/README.md). With a
+  distributor installed, UnifiedPush takes precedence over FCM (registered on app start
+  after login). Non-message pushes (friend requests, calls) render as plain notifications
+  on the UnifiedPush path.
 - Registration CAPTCHA uses the key advertised by the official client config; self-hosted
   instances with hCaptcha enabled may not work for in-app registration.
 - The "new login experience" (`login2`, debug-only beta) does not expose the self-hosted

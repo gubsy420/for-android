@@ -1,0 +1,15 @@
+Subject: [PATCH] pushd: use aes128gcm (RFC 8291) content encoding for web push
+
+The vapid outbound consumer encrypts payloads with the legacy "aesgcm"
+draft encoding, whose decryption parameters travel in HTTP headers.
+UnifiedPush distributors forward only the request body, so payloads sent
+this way cannot be decrypted by UnifiedPush clients. Browsers have
+supported the final aes128gcm encoding (where the salt and key are part
+of the body) since ~2017, so switching is safe for web clients and
+enables Google-free push on Android.
+
+--- a/crates/daemons/pushd/src/consumers/outbound/vapid.rs
++++ b/crates/daemons/pushd/src/consumers/outbound/vapid.rs
+@@
+-        builder.set_payload(ContentEncoding::AesGcm, payload_body.as_bytes());
++        builder.set_payload(ContentEncoding::Aes128Gcm, payload_body.as_bytes());

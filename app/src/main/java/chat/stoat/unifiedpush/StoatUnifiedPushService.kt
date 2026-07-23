@@ -1,0 +1,119 @@
+package chat.stoat.unifiedpush
+
+import chat.stoat.api.StoatAPI
+import chat.stoat.api.StoatJson
+import chat.stoat.api.routes.push.subscribePush
+import chat.stoat.c2dm.PushMessageRenderer
+import chat.stoat.core.model.schemas.Message
+import chat.stoat.core.model.data.STOAT_FILES
+import chat.stoat.persistence.KVStorage
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.Serializable
+import logcat.LogPriority
+import logcat.logcat
+import org.unifiedpush.android.connector.FailedReason
+import org.unifiedpush.android.connector.PushService
+import org.unifiedpush.android.connector.data.PushEndpoint
+import org.unifiedpush.android.connector.data.PushMessage
+
+/**
+ * Fork addition (UnifiedPush support): receives push messages from a UnifiedPush
+ * distributor (e.g. ntfy) as an alternative to FCM, so notifications work without
+ * Google services.
+ *
+ * The Stoat backend's vapid consumer sends the same payloads it sends to
+ * browsers: for chat messages, a JSON `PushNotification` object; for friend
+ * requests / calls, a small `{"body": ...}` object. Requires the instance's
+ * pushd to encrypt with aes128gcm (see FORK_NOTES.md).
+ */
+@Serializable
+private data class WebPushPayload(
+    val author: String? = null,
+    val icon: String? = null,
+    val image: String? = null,
+    val body: String? = null,
+    val title: String? = null,
+    val tag: String? = null,
+    val message: Message? = null
+)
+
+class StoatUnifiedPushService : PushService() {
+    private fun ensureSession() {
+        if (StoatAPI.sessionToken.isEmpty()) {
+            runBlocking {
+                KVStorage(this@StoatUnifiedPushService).get("sessionToken")?.let {
+                    StoatAPI.setSessionHeader(it)
+                }
+            }
+        }
+    }
+
+    override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
+        val keys = endpoint.pubKeySet ?: run {
+            logcat(LogPriority.ERROR) { "UnifiedPush endpoint has no key set, cannot subscribe" }
+            return
+        }
+
+        ensureSession()
+        runBlocking {
+            try {
+                subscribePush(
+                    endpoint = endpoint.url,
+                    auth = keys.auth,
+                    p256diffieHellman = keys.pubKey
+                )
+                logcat { "Subscribed UnifiedPush endpoint with server" }
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR) { "Failed to subscribe UnifiedPush endpoint: $e" }
+            }
+        }
+    }
+
+    override fun onMessage(message: PushMessage, instance: String) {
+        if (!message.decrypted) {
+            logcat(LogPriority.ERROR) {
+                "UnifiedPush message could not be decrypted. The server likely encrypts " +
+                        "with legacy aesgcm instead of aes128gcm; see FORK_NOTES.md."
+            }
+            return
+        }
+
+        val payload = try {
+            StoatJson.decodeFromString(
+                WebPushPayload.serializer(),
+                message.content.decodeToString()
+            )
+        } catch (e: Exception) {
+            logcat(LogPriority.ERROR) { "Unparseable UnifiedPush payload: $e" }
+            return
+        }
+
+        val msg = payload.message
+        if (msg != null) {
+            PushMessageRenderer.render(
+                context = this,
+                authorId = msg.author ?: "",
+                authorName = payload.author ?: "Unknown",
+                avatarUrl = payload.icon
+                    ?: msg.author?.let { "$STOAT_FILES/avatars/$it" }.orEmpty(),
+                body = payload.body ?: "",
+                channelId = msg.channel ?: payload.tag ?: return,
+                messageId = msg.id ?: return
+            )
+        } else {
+            PushMessageRenderer.renderSimple(
+                context = this,
+                title = payload.title ?: payload.author,
+                body = payload.body ?: return
+            )
+        }
+    }
+
+    override fun onRegistrationFailed(reason: FailedReason, instance: String) {
+        logcat(LogPriority.ERROR) { "UnifiedPush registration failed: $reason" }
+    }
+
+    override fun onUnregistered(instance: String) {
+        logcat(LogPriority.WARN) { "UnifiedPush distributor unregistered us" }
+    }
+}

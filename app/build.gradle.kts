@@ -251,6 +251,9 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
 
+    // Fork addition: Google-free push via UnifiedPush
+    implementation(libs.unifiedpush.connector)
+
     implementation(libs.shimmer)
 
     debugImplementation(libs.chucker)

@@ -93,6 +93,7 @@ jetbrains-markdown = { module = "org.jetbrains:markdown", version = "0.7.3" }
 highlights = { module = "dev.snipme:highlights", version = "1.0.0" }
 firebase-bom = { module = "com.google.firebase:firebase-bom", version = "33.15.0" }
 firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
+unifiedpush-connector = { module = "org.unifiedpush.android:connector", version = "3.0.10" }
 shimmer = { module = "com.valentinilk.shimmer:compose-shimmer", version = "1.3.1" }
 chucker = { module = "com.github.chuckerteam.chucker:library", version.ref = "chucker" }
 chucker-noop = { module = "com.github.chuckerteam.chucker:library-no-op", version.ref = "chucker" }

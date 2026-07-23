@@ -65,6 +65,15 @@
             </intent-filter>
         </service>
 
+        <!-- Fork addition: Google-free push via UnifiedPush -->
+        <service
+            android:name=".unifiedpush.StoatUnifiedPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".services.OngoingCallService"
             android:exported="false"
