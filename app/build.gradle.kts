@@ -251,8 +251,13 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
 
-    // Fork addition: Google-free push via UnifiedPush
-    implementation(libs.unifiedpush.connector)
+    // Fork addition: Google-free push via UnifiedPush. The connector's tink (JVM)
+    // dependency pulls protobuf-java, which duplicates LiveKit's protobuf-javalite;
+    // tink-android is API-identical with protobuf shaded internally.
+    implementation(libs.unifiedpush.connector) {
+        exclude(group = "com.google.crypto.tink", module = "tink")
+    }
+    implementation(libs.tink.android)
 
     implementation(libs.shimmer)
 
