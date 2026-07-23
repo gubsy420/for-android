@@ -39,7 +39,7 @@ jobs:
           HEAD_SHA=$(git rev-parse HEAD)
           echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
-          RELEASED_SHA=$(gh release view latest --json targetCommitish --jq .targetCommitish 2>/dev/null || echo none)
+          RELEASED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .target_commitish 2>/dev/null || echo none)
           if [ "${{ github.event_name }}" = "workflow_run" ] && [ "$RELEASED_SHA" = "$HEAD_SHA" ]; then
             echo "Release already built from $HEAD_SHA; skipping."
             echo "build=false" >> "$GITHUB_OUTPUT"
@@ -97,19 +97,26 @@ jobs:
           retention-days: 14
           path: app/build/outputs/apk/debug/*.apk
 
-      - name: Publish rolling release
-        # Recreates the "latest" release on the current commit each build, so
-        # https://github.com/<owner>/<repo>/releases/download/latest/app-debug.apk
-        # is a stable download URL (and Obtainium-compatible).
+      - name: Publish release
+        # A dated tag per build: Obtainium sees a new version string each time,
+        # and GitHub's native "latest" URL stays stable:
+        # https://github.com/<owner>/<repo>/releases/latest/download/app-debug.apk
+        # Older build releases are pruned, keeping the most recent 10.
         if: steps.gate.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ steps.gate.outputs.head_sha }}
         run: |
           VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts || echo unknown)
-          gh release delete latest --cleanup-tag --yes || true
-          gh release create latest app/build/outputs/apk/debug/*.apk \
-            --prerelease \
+          TAG="v$VERSION-$(date -u +%Y.%m.%d)-${HEAD_SHA::7}"
+          gh release create "$TAG" app/build/outputs/apk/debug/*.apk \
             --target "$HEAD_SHA" \
             --title "Stoat $VERSION self-hosted fork ($(date -u +%Y-%m-%d))" \
             --notes "Automated debug build of commit ${HEAD_SHA::7} with self-hosted server support. Built $(date -u '+%Y-%m-%d %H:%M UTC')."
+
+          gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[10:] | .[].tagName' |
+          while read -r OLD; do
+            echo "Pruning old release $OLD"
+            gh release delete "$OLD" --cleanup-tag --yes || true
+          done

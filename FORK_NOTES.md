@@ -56,15 +56,16 @@ conflict can involve fork code):
 
 ## Downloading builds
 
-Every successful build publishes the APK to a rolling `latest` GitHub release, so the
-newest build is always at:
+Every successful build publishes a GitHub release with a dated tag
+(`v<version>-<date>-<commit>`; the 10 newest are kept), so the newest build is always at:
 
 ```
-https://github.com/gubsy420/for-android/releases/download/latest/app-debug.apk
+https://github.com/gubsy420/for-android/releases/latest/download/app-debug.apk
 ```
 
-This URL also works with [Obtainium](https://github.com/ImranR98/Obtainium) for automatic
-updates on-device. Builds are debug builds signed with the committed `.github/debug.keystore`
+For automatic updates on-device, add `https://github.com/gubsy420/for-android` as an app
+source in [Obtainium](https://github.com/ImranR98/Obtainium) — each build's dated tag reads
+as a new version. Builds are debug builds signed with the committed `.github/debug.keystore`
 (standard Android debug passwords) so consecutive builds install as in-place updates.
 Note: because the keystore is public, treat these builds as personal-use; anyone can produce
 an APK with the same signature.
