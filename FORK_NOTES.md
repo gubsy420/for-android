@@ -33,7 +33,7 @@ upstream:
 | `app/.../screens/login/SelfHostedServerScreen.kt` | The GUI flow (screen + ViewModel) |
 | `app/.../c2dm/PushMessageRenderer.kt` | Notification rendering, extracted from `HandlerService` so FCM and UnifiedPush share it |
 | `app/.../unifiedpush/StoatUnifiedPushService.kt` | UnifiedPush receiver: endpoint registration + payload parsing |
-| `app/.../unifiedpush/UnifiedPushManager.kt` | Auto-registers with a UnifiedPush distributor after login |
+| `app/.../unifiedpush/UnifiedPushManager.kt` | Registers/unregisters a UnifiedPush distributor; respects the `pushNotificationsRejected` opt-out |
 | `selfhost/` | Backend patch + instructions for aes128gcm web push (UnifiedPush prerequisite) |
 | `.github/workflows/sync-upstream.yml` | Daily upstream sync automation |
 | `.github/workflows/build-fork.yml` | Debug APK builds |
@@ -44,7 +44,11 @@ conflict can involve fork code):
 
 | File | Change |
 |---|---|
-| `core/model/.../data/Constants.kt` | `STOAT_BASE`, `STOAT_WEBSOCKET`, `STOAT_FILES`, `STOAT_PROXY`, `STOAT_WEB_APP` changed from `const val` to getters delegating to `EndpointConfig` |
+| `core/model/.../data/Constants.kt` | `STOAT_BASE`, `STOAT_WEBSOCKET`, `STOAT_FILES`, `STOAT_PROXY`, `STOAT_WEB_APP`, `STOAT_INVITES` changed from `const val` to getters delegating to `EndpointConfig` |
+| `core/model/.../schemas/Invites.kt` | `isInviteUri` also matches the official `stt.gg` host when on a self-hosted instance |
+| `app/.../screens/chat/dialogs/InviteDialog.kt` | Displays the full invite host + path prefix (dynamic) |
+| `app/.../composables/screens/services/DiscoverView.kt` | Pins Discover to the official invites domain (it is an official-instance service) |
+| `app/.../screens/settings/NotificationsSettingsScreen.kt` | Push toggle is UnifiedPush-aware (reflects/controls the actual transport) |
 | `app/.../StoatApplication.kt` | Hydrates persisted endpoints on startup (before any network use) |
 | `app/.../activities/MainActivity.kt` | Registers the `login/selfhosted` route; skips first-party health/geo checks on custom instances |
 | `app/.../screens/login/LoginGreetingScreen.kt` | Adds the "Use a self-hosted server" link |
@@ -87,8 +91,13 @@ an APK with the same signature.
 
 ## Known limitations
 
-- Invite links generated in-app still use the official `stt.gg` domain; links to a
-  self-hosted *web app* are recognized, `stt.gg`-style short links of other instances are not.
+- Invite links generated in-app follow the configured instance: `https://<web-app>/invite/<code>`
+  on a self-hosted server (matching the web client), `stt.gg/<code>` on the official server.
+  **Deep-link caveat:** the Android manifest's invite intent filters only register the known
+  official hosts (`stoat.chat`, `stt.gg`, `app.revolt.chat`, `rvlt.gg`), so tapping a
+  self-hosted invite link in an external app opens it in a browser rather than the app — the
+  instance domain isn't known at build time, so it can't be added to a static intake filter.
+  Pasting the code into Add Server, or opening the link from within the app, works.
 - Terms/privacy/support/changelog links always point at official Stoat pages.
 - Push notifications: FCM requires a real `google-services.json` at build time and a
   backend configured for the same Firebase project. Alternatively the fork supports

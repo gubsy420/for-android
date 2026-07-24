@@ -7,6 +7,7 @@ const val STOAT_OFFICIAL_WEBSOCKET = "wss://events.stoat.chat"
 const val STOAT_OFFICIAL_FILES = "https://cdn.stoatusercontent.com"
 const val STOAT_OFFICIAL_PROXY = "https://proxy.stoatusercontent.com"
 const val STOAT_OFFICIAL_WEB_APP = "https://stoat.chat"
+const val STOAT_OFFICIAL_INVITES = "https://stt.gg"
 
 /**
  * Fork addition (self-hosted support): runtime-mutable endpoint configuration.
@@ -26,6 +27,14 @@ object EndpointConfig {
     /** True when the app is pointed at a non-official (self-hosted) instance. */
     val isCustom: Boolean
         get() = apiBase != STOAT_OFFICIAL_BASE
+
+    /**
+     * Base URL that generated invite links are appended to (`<base>/<code>`).
+     * Official instances use the stt.gg short domain; self-hosted instances use
+     * the web app's `/invite` path, matching the links the web client produces.
+     */
+    val inviteBase: String
+        get() = if (isCustom) "$webApp/invite" else STOAT_OFFICIAL_INVITES
 
     fun reset() {
         apiBase = STOAT_OFFICIAL_BASE

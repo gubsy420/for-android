@@ -139,7 +139,9 @@ fun InviteDialog(channelId: String, onDismissRequest: () -> Unit) {
             Spacer(Modifier.height(16.dp))
 
             Text(
-                (Uri.parse(STOAT_INVITES).host ?: "rvlt.gg") + "/",
+                // Fork change: include the path so self-hosted "<domain>/invite/"
+                // prefixes display accurately
+                Uri.parse(STOAT_INVITES).let { (it.host ?: "rvlt.gg") + it.path.orEmpty() } + "/",
                 style = MaterialTheme.typography.bodySmall,
                 textAlign = TextAlign.Center,
                 modifier = Modifier

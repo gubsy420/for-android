@@ -35,6 +35,7 @@ import chat.stoat.composables.generic.CenteredListItem
 import chat.stoat.dialogs.NotificationRationaleDialog
 import chat.stoat.persistence.KVStorage
 import chat.stoat.settings.dsl.SettingsPage
+import chat.stoat.unifiedpush.UnifiedPushManager
 import com.google.android.gms.tasks.OnCompleteListener
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.launch
@@ -51,6 +52,11 @@ class NotificationsSettingsScreenViewModel(
     var isUpdating by mutableStateOf(false)
         private set
 
+    // Fork change: reflect the actual transport. UnifiedPush is used whenever a
+    // distributor app is installed; otherwise the app falls back to FCM.
+    val usingUnifiedPush: Boolean
+        get() = UnifiedPushManager.hasDistributor(context)
+
     init {
         viewModelScope.launch {
             isPushEnabled = checkPushEnabled()
@@ -59,6 +65,11 @@ class NotificationsSettingsScreenViewModel(
 
     private suspend fun checkPushEnabled(): Boolean {
         val hasPermission = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        // Fork change: on UnifiedPush, push works once a distributor is registered
+        // and notifications are permitted; there is no FCM token involved.
+        if (usingUnifiedPush) {
+            return hasPermission && UnifiedPushManager.isRegistered(context)
+        }
         val hasToken = kvStorage.get("fcmToken") != null
         return hasPermission && hasToken
     }
@@ -70,6 +81,21 @@ class NotificationsSettingsScreenViewModel(
     fun subscribeIfNeeded() {
         if (isUpdating) return
         isUpdating = true
+
+        // Fork change: prefer UnifiedPush when a distributor is available.
+        if (usingUnifiedPush) {
+            viewModelScope.launch {
+                try {
+                    kvStorage.remove("pushNotificationsRejected")
+                    UnifiedPushManager.register(context)
+                    isPushEnabled = checkPushEnabled()
+                } finally {
+                    isUpdating = false
+                }
+            }
+            return
+        }
+
         FirebaseMessaging.getInstance().token.addOnCompleteListener(
             OnCompleteListener { task ->
                 if (!task.isSuccessful) {
@@ -101,12 +127,18 @@ class NotificationsSettingsScreenViewModel(
         isUpdating = true
         viewModelScope.launch {
             try {
-                val token = kvStorage.get("fcmToken")
-                if (token != null) {
-                    runCatching { unsubscribePush() }
-                    kvStorage.remove("fcmToken")
-                }
+                // Fork change: persist the opt-out first so it is honored even if
+                // the transport-specific teardown below fails.
                 kvStorage.set("pushNotificationsRejected", true)
+                if (usingUnifiedPush) {
+                    UnifiedPushManager.unregister(context)
+                } else {
+                    val token = kvStorage.get("fcmToken")
+                    if (token != null) {
+                        runCatching { unsubscribePush() }
+                        kvStorage.remove("fcmToken")
+                    }
+                }
                 isPushEnabled = false
             } finally {
                 isUpdating = false

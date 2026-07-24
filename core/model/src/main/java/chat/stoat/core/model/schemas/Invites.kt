@@ -3,6 +3,7 @@ package chat.stoat.core.model.schemas
 import android.net.Uri
 import androidx.core.net.toUri
 import chat.stoat.core.model.data.STOAT_INVITES
+import chat.stoat.core.model.data.STOAT_OFFICIAL_INVITES
 import chat.stoat.core.model.data.STOAT_WEB_APP
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -53,7 +54,10 @@ data class InviteJoined(
 fun Uri.isInviteUri(): Boolean {
     val firstPathSegmentIsInvite = this.pathSegments.firstOrNull() == "invite"
     val isStoatChat = this.host == STOAT_WEB_APP.toUri().host
-    val matchSttGG = this.host == STOAT_INVITES.toUri().host
+    // Fork change: also accept official stt.gg links when pointed at a
+    // self-hosted instance (STOAT_INVITES is dynamic there)
+    val matchSttGG = this.host == STOAT_INVITES.toUri().host ||
+            this.host == STOAT_OFFICIAL_INVITES.toUri().host
 
     val matchApp = isStoatChat && firstPathSegmentIsInvite
 

@@ -6,6 +6,6 @@ const val STOAT_MARKETING = "https://stoat.chat"
 val STOAT_FILES: String get() = EndpointConfig.files
 val STOAT_PROXY: String get() = EndpointConfig.proxy
 val STOAT_WEB_APP: String get() = EndpointConfig.webApp
-const val STOAT_INVITES = "https://stt.gg"
+val STOAT_INVITES: String get() = EndpointConfig.inviteBase
 val STOAT_WEBSOCKET: String get() = EndpointConfig.websocket
 const val STOAT_CHANGELOG = "https://changelog.stoat.chat"
