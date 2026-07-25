@@ -23,6 +23,7 @@ import chat.stoat.core.model.schemas.User
 import chat.stoat.core.model.util.ChannelVoiceState
 import chat.stoat.persistence.Database
 import chat.stoat.persistence.SqlStorage
+import chat.stoat.unifiedpush.UnifiedPushManager
 import com.chuckerteam.chucker.api.ChuckerCollector
 import com.chuckerteam.chucker.api.ChuckerInterceptor
 import com.chuckerteam.chucker.api.RetentionManager
@@ -179,6 +180,11 @@ object StoatAPI {
         fetchSelf()
         startSocketOps()
         unreads.sync()
+        // Fork addition: register for UnifiedPush here so it covers every login
+        // path (interactive login, MFA, and cold-start auto-login), not just the
+        // auto-login case. Without this, a fresh install would not subscribe for
+        // push until the next cold start. No-op when no distributor is installed.
+        UnifiedPushManager.registerIfAvailable(StoatApplication.instance)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
