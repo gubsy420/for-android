@@ -31,8 +31,8 @@ upstream:
 | `core/model/.../data/EndpointConfig.kt` | Runtime-mutable endpoint config; official URLs as defaults |
 | `app/.../selfhost/SelfHostedEndpoints.kt` | Persistence (KVStorage/DataStore) + hydration |
 | `app/.../screens/login/SelfHostedServerScreen.kt` | The GUI flow (screen + ViewModel) |
-| `app/.../c2dm/PushMessageRenderer.kt` | Notification rendering, extracted from `HandlerService` so FCM and UnifiedPush share it |
-| `app/.../unifiedpush/StoatUnifiedPushService.kt` | UnifiedPush receiver: endpoint registration + payload parsing |
+| `app/.../c2dm/PushMessageRenderer.kt` | Notification rendering, extracted from `HandlerService` so FCM and UnifiedPush share it. Does blocking I/O (Glide `.get()`, `runBlocking` REST/DB) — callers must invoke it off the main thread |
+| `app/.../unifiedpush/StoatUnifiedPushService.kt` | UnifiedPush receiver: endpoint registration + payload parsing. **The connector calls `onMessage`/`onNewEndpoint` on the main thread**, so all work is dispatched to a background `Dispatchers.IO` scope — do not add blocking calls directly in the callbacks (ANR risk) |
 | `app/.../unifiedpush/UnifiedPushManager.kt` | Registers/unregisters a UnifiedPush distributor; respects the `pushNotificationsRejected` opt-out |
 | `selfhost/` | Backend patch + instructions for aes128gcm web push (UnifiedPush prerequisite) |
 | `.github/workflows/sync-upstream.yml` | Daily upstream sync automation |
