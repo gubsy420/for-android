@@ -24,6 +24,11 @@ class ChannelRegistrator(val context: Context) {
 
         const val CHANNEL_ID_GROUP_VOICE = "chat.stoat.voice"
         const val CHANNEL_ID_GROUP_VOICE_ONGOING = "chat.stoat.voice.ongoing"
+
+        // Fork addition (background-socket push): low-importance channel for the
+        // persistent foreground-service notification.
+        const val CHANNEL_ID_GROUP_SERVICE = "chat.stoat.service"
+        const val CHANNEL_ID_SERVICE_CONNECTION = "chat.stoat.service.connection"
     }
 
     private val notificationManager =
@@ -46,6 +51,12 @@ class ChannelRegistrator(val context: Context) {
             NotificationChannelGroup(
                 CHANNEL_ID_GROUP_VOICE,
                 context.getString(R.string.notification_channel_group_voice)
+            )
+        )
+        notificationManager.createNotificationChannelGroup(
+            NotificationChannelGroup(
+                CHANNEL_ID_GROUP_SERVICE,
+                context.getString(R.string.notification_channel_group_service)
             )
         )
     }
@@ -84,6 +95,20 @@ class ChannelRegistrator(val context: Context) {
                     context.getString(R.string.notification_channel_ongoing_call_description)
                 setSound(null, null)
                 enableVibration(false)
+            }
+        )
+        notificationManager.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID_SERVICE_CONNECTION,
+                context.getString(R.string.notification_channel_connection),
+                NotificationManager.IMPORTANCE_MIN
+            ).apply {
+                group = CHANNEL_ID_GROUP_SERVICE
+                description =
+                    context.getString(R.string.notification_channel_connection_description)
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
             }
         )
     }

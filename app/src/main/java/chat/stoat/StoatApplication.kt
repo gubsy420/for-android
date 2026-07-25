@@ -30,6 +30,10 @@ class StoatApplication : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         AndroidLogcatLogger.installOnDebuggableApp(this, minPriority = LogPriority.VERBOSE)
 
+        // Fork addition (background-socket push): track app foreground/background so
+        // the socket service only raises notifications while backgrounded.
+        registerActivityLifecycleCallbacks(chat.stoat.services.AppVisibility)
+
         if (BuildConfig.DEBUG) {
             LiveKit.loggingLevel = LoggingLevel.DEBUG
         }

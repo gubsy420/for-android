@@ -33,7 +33,10 @@ upstream:
 | `app/.../screens/login/SelfHostedServerScreen.kt` | The GUI flow (screen + ViewModel) |
 | `app/.../c2dm/PushMessageRenderer.kt` | Notification rendering, extracted from `HandlerService` so FCM and UnifiedPush share it. Does blocking I/O (Glide `.get()`, `runBlocking` REST/DB) — callers must invoke it off the main thread |
 | `app/.../unifiedpush/StoatUnifiedPushService.kt` | UnifiedPush receiver: endpoint registration + payload parsing. **The connector calls `onMessage`/`onNewEndpoint` on the main thread**, so all work is dispatched to a background `Dispatchers.IO` scope — do not add blocking calls directly in the callbacks (ANR risk) |
-| `app/.../unifiedpush/UnifiedPushManager.kt` | Registers/unregisters a UnifiedPush distributor; respects the `pushNotificationsRejected` opt-out |
+| `app/.../unifiedpush/UnifiedPushManager.kt` | Registers/unregisters a UnifiedPush distributor; respects the `pushNotificationsRejected` opt-out; skips registration when background-socket push is enabled |
+| `app/.../services/ForegroundSocketService.kt` | **Background-socket push**: foreground service that keeps the realtime websocket alive when backgrounded and renders notifications directly from message frames — no Google, no distributor, no backend push. `specialUse` FGS type (no Android 15+ runtime cap). Evaluates notification settings, direct/role/mass mentions on-device |
+| `app/.../services/AppVisibility.kt` | App foreground/background tracker (activity lifecycle callbacks) so the socket service only notifies while backgrounded |
+| `app/.../services/BootReceiver.kt` | Restarts the socket service after reboot when opted in |
 | `selfhost/` | Backend patch + instructions for aes128gcm web push (UnifiedPush prerequisite) |
 | `.github/workflows/sync-upstream.yml` | Daily upstream sync automation |
 | `.github/workflows/build-fork.yml` | Debug APK builds |
@@ -48,14 +51,16 @@ conflict can involve fork code):
 | `core/model/.../schemas/Invites.kt` | `isInviteUri` also matches the official `stt.gg` host when on a self-hosted instance |
 | `app/.../screens/chat/dialogs/InviteDialog.kt` | Displays the full invite host + path prefix (dynamic) |
 | `app/.../composables/screens/services/DiscoverView.kt` | Pins Discover to the official invites domain (it is an official-instance service) |
-| `app/.../screens/settings/NotificationsSettingsScreen.kt` | Push toggle is UnifiedPush-aware (reflects/controls the actual transport) |
-| `app/.../StoatApplication.kt` | Hydrates persisted endpoints on startup (before any network use) |
+| `app/.../screens/settings/NotificationsSettingsScreen.kt` | Push toggle is UnifiedPush-aware (reflects/controls the actual transport); adds the "Background connection" toggle for background-socket push |
+| `app/.../api/StoatAPI.kt` | `loginAs` starts the background-socket service when opted in (all login paths) |
+| `app/.../c2dm/ChannelRegistrator.kt` | Adds a low-importance notification channel for the socket service's persistent notification |
+| `app/.../StoatApplication.kt` | Hydrates persisted endpoints on startup (before any network use); registers `AppVisibility` foreground tracker |
 | `app/.../activities/MainActivity.kt` | Registers the `login/selfhosted` route; skips first-party health/geo checks on custom instances |
 | `app/.../screens/login/LoginGreetingScreen.kt` | Adds the "Use a self-hosted server" link |
 | `app/.../di/ViewModelModule.kt` | Registers `SelfHostedServerScreenViewModel` |
 | `app/src/main/res/values/strings.xml` | Adds `self_hosted_*` strings (appended at end of file) |
 | `app/.../c2dm/HandlerService.kt` | Notification rendering moved to `PushMessageRenderer` (FCM behavior unchanged); `generateLetterBitmap` made internal. Upstream changes to rendering logic must be applied to `PushMessageRenderer.render` instead |
-| `app/src/main/AndroidManifest.xml` | Adds the UnifiedPush service declaration |
+| `app/src/main/AndroidManifest.xml` | Adds the UnifiedPush service declaration; the background-socket `specialUse` foreground service + boot receiver + their permissions |
 | `gradle/libs.versions.toml` + `app/build.gradle.kts` | Adds the `org.unifiedpush.android:connector` dependency |
 
 ## Downloading builds
@@ -101,13 +106,24 @@ an APK with the same signature.
   instance domain isn't known at build time, so it can't be added to a static intake filter.
   Pasting the code into Add Server, or opening the link from within the app, works.
 - Terms/privacy/support/changelog links always point at official Stoat pages.
-- Push notifications: FCM requires a real `google-services.json` at build time and a
-  backend configured for the same Firebase project. Alternatively the fork supports
-  **UnifiedPush** (Google-free): install a distributor app (e.g. ntfy) and run a backend
-  patched for aes128gcm web push — see [selfhost/README.md](selfhost/README.md). With a
-  distributor installed, UnifiedPush takes precedence over FCM (registered on app start
-  after login). Non-message pushes (friend requests, calls) render as plain notifications
-  on the UnifiedPush path.
+- Push notifications: three transports are supported, in order of "Google-freeness":
+  1. **FCM** — requires a real `google-services.json` at build time and a backend
+     configured for the same Firebase project. Used by default when no alternative is set up.
+  2. **UnifiedPush** (Google-free) — install a distributor app (e.g. ntfy) and run a backend
+     patched for aes128gcm web push (see [selfhost/README.md](selfhost/README.md)). With a
+     distributor installed, UnifiedPush takes precedence over FCM (registered on app start
+     after login). Non-message pushes (friend requests, calls) render as plain notifications.
+  3. **Background connection** (Google-free, no distributor, no backend push) — enable
+     *Settings → Notifications → Background connection*. The app keeps its realtime websocket
+     alive in a foreground service and renders notifications directly from message frames.
+     Because the client evaluates notification settings and mentions (direct/role/mass)
+     on-device, this needs no pushd, no web-push encryption, and no MongoDB replica set — it
+     sidesteps the entire server-side push pipeline. Trade-offs: a mandatory persistent
+     (minimal, low-priority) notification, and higher battery use than a shared distributor;
+     on aggressive OEMs (e.g. Samsung) exempt the app from battery optimization for
+     reliability. While enabled, UnifiedPush registration is skipped (the socket keeps the
+     account permanently online, so distributor/pushd delivery would be redundant). Survives
+     reboot via a boot receiver. Only surfaces notifications while the app is backgrounded.
 - Registration CAPTCHA uses the key advertised by the official client config; self-hosted
   instances with hCaptcha enabled may not work for in-app registration.
 - The "new login experience" (`login2`, debug-only beta) does not expose the self-hosted

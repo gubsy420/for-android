@@ -37,12 +37,23 @@ object UnifiedPushManager {
         }
 
         CoroutineScope(Dispatchers.IO).launch {
+            val kv = KVStorage(context)
+
             // Fork: respect an explicit opt-out from the notification settings so a
             // disabled state is not silently re-enabled on the next login.
-            val rejected =
-                KVStorage(context).getBoolean("pushNotificationsRejected") ?: false
+            val rejected = kv.getBoolean("pushNotificationsRejected") ?: false
             if (rejected) {
                 logcat { "Push disabled by user; skipping UnifiedPush registration" }
+                return@launch
+            }
+
+            // Fork: when background-socket push is enabled, the app stays permanently
+            // online and renders notifications from the socket directly, so a
+            // distributor subscription would be redundant (and could double-notify).
+            val socketEnabled =
+                kv.getBoolean(chat.stoat.services.ForegroundSocketService.KEY_ENABLED) ?: false
+            if (socketEnabled) {
+                logcat { "Background-socket push enabled; skipping UnifiedPush registration" }
                 return@launch
             }
 

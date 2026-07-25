@@ -893,6 +893,9 @@
     <string name="settings_notifications_push_description">Receive notifications for new messages, mentions, and other updates, even when you\'re not actively using the app.</string>
     <string name="settings_notifications_system">System Settings</string>
     <string name="settings_notifications_system_description">Manage notification permissions and preferences from your device\'s system settings.</string>
+    <!-- Fork addition: background-socket (Google-free) push -->
+    <string name="settings_notifications_background_socket">Background connection</string>
+    <string name="settings_notifications_background_socket_description">Keep a live connection to your server to receive notifications without Google services or a separate app. Shows a persistent notification and uses more battery.</string>
 
     <string name="settings_feedback">Feedback</string>
     <string name="settings_feedback_description">Join the Stoat server to give feedback or suggestions and report bugs.</string>
@@ -944,6 +947,14 @@
     <string name="notification_channel_group_voice">Voice</string>
     <string name="notification_channel_ongoing_call">Ongoing calls</string>
     <string name="notification_channel_ongoing_call_description">Shown persistently while you are connected to a voice channel.</string>
+    <!-- Fork addition: background-socket (Google-free) push -->
+    <string name="notification_channel_group_service">Background service</string>
+    <string name="notification_channel_connection">Background connection</string>
+    <string name="notification_channel_connection_description">Shown persistently while keeping a live connection to your server for notifications.</string>
+    <string name="notification_connection_title">Connected</string>
+    <string name="notification_connection_description">Listening for new messages</string>
+    <string name="notification_message_attachment">Sent an attachment</string>
+    <string name="notification_message_fallback">Sent a message</string>
 
     <string name="keyboard_shortcut_messaging">Messaging</string>
     <string name="keyboard_shortcut_messaging_new_line">New Line</string>

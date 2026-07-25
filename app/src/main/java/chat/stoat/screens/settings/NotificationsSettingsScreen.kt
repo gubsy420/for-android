@@ -34,6 +34,7 @@ import chat.stoat.api.routes.push.unsubscribePush
 import chat.stoat.composables.generic.CenteredListItem
 import chat.stoat.dialogs.NotificationRationaleDialog
 import chat.stoat.persistence.KVStorage
+import chat.stoat.services.ForegroundSocketService
 import chat.stoat.settings.dsl.SettingsPage
 import chat.stoat.unifiedpush.UnifiedPushManager
 import com.google.android.gms.tasks.OnCompleteListener
@@ -52,6 +53,11 @@ class NotificationsSettingsScreenViewModel(
     var isUpdating by mutableStateOf(false)
         private set
 
+    // Fork addition (background-socket push): whether the Google-free foreground
+    // socket transport is enabled.
+    var isBackgroundSocketEnabled by mutableStateOf(false)
+        private set
+
     // Fork change: reflect the actual transport. UnifiedPush is used whenever a
     // distributor app is installed; otherwise the app falls back to FCM.
     val usingUnifiedPush: Boolean
@@ -60,6 +66,25 @@ class NotificationsSettingsScreenViewModel(
     init {
         viewModelScope.launch {
             isPushEnabled = checkPushEnabled()
+            isBackgroundSocketEnabled =
+                kvStorage.getBoolean(ForegroundSocketService.KEY_ENABLED) ?: false
+        }
+    }
+
+    /**
+     * Fork addition: toggle the Google-free background-socket transport. When
+     * enabled, the app keeps its realtime socket alive in a foreground service and
+     * renders notifications directly, so no distributor or FCM is required.
+     */
+    fun setBackgroundSocket(enabled: Boolean) {
+        viewModelScope.launch {
+            kvStorage.set(ForegroundSocketService.KEY_ENABLED, enabled)
+            isBackgroundSocketEnabled = enabled
+            if (enabled) {
+                ForegroundSocketService.start(context)
+            } else {
+                ForegroundSocketService.stop(context)
+            }
         }
     }
 
@@ -160,6 +185,14 @@ fun NotificationsSettingsScreen(
         if (isGranted) viewModel.subscribeIfNeeded()
     }
 
+    // Fork addition (background-socket push): a foreground service can only show
+    // notifications once POST_NOTIFICATIONS is granted, so gate enabling on it.
+    val askSocketPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) viewModel.setBackgroundSocket(true)
+    }
+
     if (viewModel.showRationale) {
         NotificationRationaleDialog(
             onSelected = { accepted ->
@@ -194,6 +227,29 @@ fun NotificationsSettingsScreen(
                 .clickable(enabled = !viewModel.isUpdating) {
                     if (viewModel.isPushEnabled) viewModel.disablePush()
                     else viewModel.onEnableRequested()
+                }
+        )
+        CenteredListItem(
+            headlineContent = { Text(stringResource(R.string.settings_notifications_background_socket)) },
+            supportingContent = { Text(stringResource(R.string.settings_notifications_background_socket_description)) },
+            trailingContent = {
+                Switch(
+                    checked = viewModel.isBackgroundSocketEnabled,
+                    onCheckedChange = null
+                )
+            },
+            modifier = Modifier
+                .semantics { role = Role.Switch }
+                .clickable {
+                    if (viewModel.isBackgroundSocketEnabled) {
+                        viewModel.setBackgroundSocket(false)
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        !NotificationManagerCompat.from(context).areNotificationsEnabled()
+                    ) {
+                        askSocketPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        viewModel.setBackgroundSocket(true)
+                    }
                 }
         )
         CenteredListItem(

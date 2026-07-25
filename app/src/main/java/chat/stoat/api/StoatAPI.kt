@@ -183,8 +183,13 @@ object StoatAPI {
         // Fork addition: register for UnifiedPush here so it covers every login
         // path (interactive login, MFA, and cold-start auto-login), not just the
         // auto-login case. Without this, a fresh install would not subscribe for
-        // push until the next cold start. No-op when no distributor is installed.
+        // push until the next cold start. No-op when no distributor is installed,
+        // or when background-socket push is enabled instead.
         UnifiedPushManager.registerIfAvailable(StoatApplication.instance)
+        // Fork addition: if the user opted into background-socket push, ensure the
+        // foreground socket service is running so notifications work when the app is
+        // backgrounded. No-op otherwise.
+        chat.stoat.services.ForegroundSocketService.startIfEnabled(StoatApplication.instance)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
