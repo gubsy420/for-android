@@ -70,7 +70,9 @@ https://github.com/gubsy420/for-android/releases/latest/download/app-debug.apk
 For automatic updates on-device, add `https://github.com/gubsy420/for-android` as an app
 source in [Obtainium](https://github.com/ImranR98/Obtainium) — each build's dated tag reads
 as a new version. Builds are debug builds signed with the committed `.github/debug.keystore`
-(standard Android debug passwords) so consecutive builds install as in-place updates.
+via the debug `signingConfig` in `app/build.gradle.kts` (standard Android debug passwords),
+so every build shares one signature and installs as an in-place update. The `versionCode`
+increments per CI build (`GITHUB_RUN_NUMBER`) so updates are seen as newer versions.
 Note: because the keystore is public, treat these builds as personal-use; anyone can produce
 an APK with the same signature.
 

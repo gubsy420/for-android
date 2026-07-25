@@ -72,14 +72,9 @@ jobs:
             cp app/google-services.json.example app/google-services.json
           fi
 
-      - name: Install persistent debug keystore
-        # Runners generate a fresh debug keystore per run, which changes the APK
-        # signature and breaks in-place updates on devices. Use the committed one
-        # (standard Android debug passwords) so every build is update-compatible.
-        if: steps.gate.outputs.build == 'true'
-        run: |
-          mkdir -p ~/.android
-          cp .github/debug.keystore ~/.android/debug.keystore
+      # Note: the committed .github/debug.keystore is applied via the debug
+      # signingConfig in app/build.gradle.kts (copying it to ~/.android does not
+      # work — AGP regenerates its own key there on CI runners).
 
       - name: Grant execute permission for gradlew
         if: steps.gate.outputs.build == 'true'

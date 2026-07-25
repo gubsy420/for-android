@@ -63,12 +63,30 @@ android {
         applicationId = "chat.revolt"
         minSdk = libs.versions.minSdk.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = Integer.parseInt("001_007_000".replace("_", ""), 10)
+        // Fork change: monotonic versionCode so consecutive fork builds are seen as
+        // proper updates. Derived from the CI run number; falls back to the base
+        // locally.
+        versionCode = Integer.parseInt("001_007_000".replace("_", ""), 10) +
+                (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
         versionName = "1.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    signingConfigs {
+        // Fork change: sign debug builds with the committed keystore explicitly, so
+        // every CI build shares one signature and installs as an in-place update.
+        // Relying on AGP's default ~/.android/debug.keystore did NOT work on CI
+        // runners (AGP regenerated a fresh throwaway key each run -> update
+        // conflicts). Standard Android debug passwords; see FORK_NOTES.md.
+        getByName("debug") {
+            storeFile = rootProject.file(".github/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
         }
     }
 
