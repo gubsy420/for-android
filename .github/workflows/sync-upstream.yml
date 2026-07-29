@@ -80,6 +80,15 @@ jobs:
     needs: sync
     if: needs.sync.outputs.result == 'conflict'
     runs-on: ubuntu-latest
+    # claude-code-action@v1 authenticates to Anthropic via GitHub OIDC even when a
+    # CLAUDE_CODE_OAUTH_TOKEN is supplied, so the job needs id-token: write or it
+    # fails with "Unable to get ACTIONS_ID_TOKEN_REQUEST_URL". The other scopes are
+    # needed by the commit/push, the fallback PR, and the summary issue.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -197,10 +206,16 @@ jobs:
           git checkout -B upstream-sync "upstream/$UPSTREAM_BRANCH"
           git push -f origin upstream-sync
 
-          EXISTING=$(gh pr list --head upstream-sync --base "$FORK_BRANCH" --state open --json number --jq length)
+          # The head must be qualified with the fork owner. upstream-sync tracks
+          # upstream/dev (stoatchat's repo), so an unqualified --head lets gh infer
+          # the head repo as stoatchat, which GITHUB_TOKEN cannot access -> the PR
+          # create fails with "Resource not accessible by integration".
+          HEAD_REF="$GITHUB_REPOSITORY_OWNER:upstream-sync"
+          EXISTING=$(gh pr list --head "$HEAD_REF" --base "$FORK_BRANCH" --state open --json number --jq length)
           if [ "$EXISTING" = "0" ]; then
             gh pr create \
-              --head upstream-sync \
+              --repo "$GITHUB_REPOSITORY" \
+              --head "$HEAD_REF" \
               --base "$FORK_BRANCH" \
               --title "Sync upstream (manual conflict resolution required)" \
               --body "Automatic merge of upstream \`$UPSTREAM_BRANCH\` failed due to conflicts, and automated resolution also failed (see $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). Resolve the conflicts in this PR, making sure the self-hosted server functionality is retained (see FORK_NOTES.md), then merge."
