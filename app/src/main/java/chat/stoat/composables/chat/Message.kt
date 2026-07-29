@@ -57,6 +57,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import chat.stoat.R
 import chat.stoat.activities.media.ImageViewActivity
 import chat.stoat.activities.media.VideoViewActivity
@@ -87,6 +88,8 @@ import chat.stoat.internals.text.Gigamoji
 import chat.stoat.internals.text.GigamojiState
 import chat.stoat.internals.text.MessageProcessor
 import chat.stoat.internals.text.stripPUAChars
+import chat.stoat.internals.toNavigationAction
+import chat.stoat.internals.toStoatWebLinkOrNull
 import chat.stoat.persistence.KVStorage
 import com.mikepenz.markdown.model.State
 import kotlinx.coroutines.launch
@@ -210,12 +213,14 @@ fun formatLongAsTime(time: Long): String {
 @Composable
 fun Message(
     message: MessageSchema,
+    onClick: () -> Unit = {},
     onMessageContextMenu: () -> Unit = {},
     onAvatarClick: () -> Unit = {},
     onNameClick: (() -> Unit)? = null,
     canReply: Boolean = false,
     onReply: () -> Unit = {},
     onAddReaction: () -> Unit = {},
+    onJumpToMessage: (String) -> Unit = {},
     fromWebhook: Boolean = false,
     webhookName: String? = null,
     modifier: Modifier = Modifier,
@@ -225,6 +230,16 @@ fun Message(
     val context = LocalContext.current
 
     val scope = rememberCoroutineScope()
+    val openMessageLinkOrBrowser: (String) -> Unit = { url ->
+        val stoatLink = url.toUri().toStoatWebLinkOrNull()
+        if (stoatLink != null) {
+            scope.launch {
+                ActionChannel.send(stoatLink.toNavigationAction())
+            }
+        } else {
+            viewUrlInBrowser(context, url)
+        }
+    }
     var kv by remember { mutableStateOf<KVStorage?>(null) }
     var showUsernameDiscriminator by remember { mutableStateOf(false) }
     var ignoreServerAvatar by remember { mutableStateOf(false) }
@@ -270,7 +285,7 @@ fun Message(
             Row(
                 modifier = Modifier
                     .combinedClickable(
-                        onClick = {},
+                        onClick = onClick,
                         onDoubleClick = {},
                         onLongClick = {
                             onMessageContextMenu()
@@ -329,16 +344,15 @@ fun Message(
                                     replyMessage.author
                                 )
                             } == true),
-                        ) {
-                            // TODO Add jump to message
-                        }
+                            onMessageClick = onJumpToMessage,
+                        )
                     }
                 }
 
                 Row(
                     modifier = Modifier
                         .combinedClickable(
-                            onClick = {},
+                            onClick = onClick,
                             onDoubleClick = {
                                 if (canReply && LoadedSettings.messageReplyStyle == MessageReplyStyle.DoubleTap) {
                                     onReply()
@@ -544,7 +558,7 @@ fun Message(
                                             embed = embed,
                                             serverId = StoatAPI.channelCache[message.channel]?.server,
                                             onLinkClick = {
-                                                viewUrlInBrowser(context, it)
+                                                openMessageLinkOrBrowser(it)
                                             })
                                         Spacer(modifier = Modifier.height(8.dp))
                                     }
@@ -556,7 +570,7 @@ fun Message(
                                                 .clip(MaterialTheme.shapes.medium)
                                                 .clickable {
                                                     embed.url?.let {
-                                                        viewUrlInBrowser(context, it)
+                                                        openMessageLinkOrBrowser(it)
                                                     }
                                                 }
                                         ) {

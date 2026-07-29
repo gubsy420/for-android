@@ -1,6 +1,7 @@
 package chat.stoat.activities
 
 import android.content.Context
+import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.Bundle
@@ -63,6 +64,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModel
@@ -89,6 +91,8 @@ import chat.stoat.composables.generic.HealthAlert
 import chat.stoat.composables.voice.VoicePermissionSwitch
 import chat.stoat.composables.voice.VoiceSheet
 import chat.stoat.core.model.data.EndpointConfig
+import chat.stoat.internals.StoatWebLink
+import chat.stoat.internals.toStoatWebLinkOrNull
 import chat.stoat.voice.VoiceCallManager
 import chat.stoat.core.model.schemas.HealthNotice
 import chat.stoat.material.EasingTokens
@@ -99,6 +103,8 @@ import chat.stoat.screens.about.AttributionScreen
 import chat.stoat.screens.changelogs.ReadChangelogScreen
 import chat.stoat.screens.chat.ChannelPinsScreen
 import chat.stoat.screens.chat.ChannelSearchScreen
+import chat.stoat.screens.chat.CHANNEL_MESSAGE_JUMP_CHANNEL_KEY
+import chat.stoat.screens.chat.CHANNEL_MESSAGE_JUMP_MESSAGE_KEY
 import chat.stoat.screens.chat.ChatRouterScreen
 import chat.stoat.screens.chat.standalone.CatchUpScreen
 import chat.stoat.screens.chat.views.channel.ChannelScreen
@@ -355,6 +361,28 @@ class MainActivity : AppCompatActivity() {
         window.statusBarColor = Color.Transparent.toArgb()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNavigationIntent(intent)
+    }
+
+    private fun handleNavigationIntent(intent: Intent) {
+        val webLink = intent.data?.toStoatWebLinkOrNull()
+        if (webLink != null) {
+            NotificationDeepLink.pendingNavigation.value = webLink
+            return
+        }
+
+        val channelId = intent.getStringExtra("channelId") ?: return
+        val messageId = intent.getStringExtra("messageId")
+        NotificationDeepLink.pendingNavigation.value = if (messageId != null) {
+            StoatWebLink.Message(channelId, messageId)
+        } else {
+            StoatWebLink.Channel(channelId)
+        }
+    }
+
     @OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -370,7 +398,7 @@ class MainActivity : AppCompatActivity() {
 
         StoatAPI.hydrateFromPersistentCache()
 
-        intent.getStringExtra("channelId")?.let { NotificationDeepLink.pendingChannelId.value = it }
+        handleNavigationIntent(intent)
 
         setContent {
             val windowSizeClass = calculateWindowSizeClass(this)
@@ -434,6 +462,7 @@ class MainActivity : AppCompatActivity() {
 }
 
 val StoatTweenInt: FiniteAnimationSpec<IntOffset> = tween(400, easing = EaseInOutExpo)
+val StoatTweenSize: FiniteAnimationSpec<IntSize> = tween(400, easing = EaseInOutExpo)
 val StoatTweenFloat: FiniteAnimationSpec<Float> = tween(400, easing = EaseInOutExpo)
 val StoatTweenDp: FiniteAnimationSpec<Dp> = tween(400, easing = EaseInOutExpo)
 val StoatTweenColour: FiniteAnimationSpec<Color> = tween(400, easing = EaseInOutExpo)
@@ -701,6 +730,14 @@ fun AppEntrypoint(
                         }
                     ) { backStackEntry ->
                         val channelId = backStackEntry.arguments?.getString("channelId") ?: ""
+                        val requestedMessageId =
+                            backStackEntry.savedStateHandle.get<String>(
+                                CHANNEL_MESSAGE_JUMP_MESSAGE_KEY
+                            )?.takeIf {
+                                backStackEntry.savedStateHandle.get<String>(
+                                    CHANNEL_MESSAGE_JUMP_CHANNEL_KEY
+                                ) == channelId
+                            }
                         ChannelScreen(
                             channelId = channelId,
                             onToggleDrawer = {},
@@ -709,7 +746,16 @@ fun AppEntrypoint(
                             backButtonAction = {
                                 navController.popBackStack()
                             },
-                            useChatUI = true
+                            useChatUI = true,
+                            requestedMessageId = requestedMessageId,
+                            onRequestedMessageConsumed = {
+                                backStackEntry.savedStateHandle.remove<String>(
+                                    CHANNEL_MESSAGE_JUMP_CHANNEL_KEY
+                                )
+                                backStackEntry.savedStateHandle.remove<String>(
+                                    CHANNEL_MESSAGE_JUMP_MESSAGE_KEY
+                                )
+                            },
                         )
                     }
 

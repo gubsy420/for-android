@@ -15,8 +15,6 @@ import chat.stoat.R
 import chat.stoat.activities.MainActivity
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.internals.ResourceLocations
-import chat.stoat.api.realtime.DisconnectionState
-import chat.stoat.api.realtime.RealtimeSocket
 import chat.stoat.api.routes.user.fetchUser
 import chat.stoat.api.settings.NotificationSettingsProvider
 import chat.stoat.api.settings.SyncedSettings
@@ -31,9 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterIsInstance
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import logcat.LogPriority
 import logcat.asLog
@@ -67,8 +63,6 @@ class ForegroundSocketService : Service() {
         private const val NOTIFICATION_ID = 68
         private const val ACTION_START = "chat.stoat.services.ForegroundSocketService.START"
         private const val ACTION_STOP = "chat.stoat.services.ForegroundSocketService.STOP"
-
-        private const val RECONNECT_POLL_MS = 5_000L
 
         fun start(context: Context) {
             try {
@@ -153,23 +147,18 @@ class ForegroundSocketService : Service() {
                 return@launch
             }
 
+            // Ensure the realtime socket is running. StoatAPI.connectWS runs a
+            // self-sustaining reconnect loop (exponential backoff) that this
+            // foreground service keeps alive by holding the process up — so we only
+            // need to make sure it has been started. If already logged in (service
+            // started while the app process is alive), the loop is already running;
+            // on a cold start (e.g. from boot) log in, which starts it.
             if (!StoatAPI.isLoggedIn()) {
                 try {
                     StoatAPI.loginAs(token)
                 } catch (e: Exception) {
                     logcat(LogPriority.ERROR) { "Socket service login failed\n" + e.asLog() }
                 }
-            }
-
-            // The in-app reconnection logic only runs while the UI is composed, so
-            // drive reconnection here for the backgrounded case.
-            while (isActive) {
-                if (RealtimeSocket.disconnectionState == DisconnectionState.Disconnected) {
-                    logcat { "Socket dropped; reconnecting from service" }
-                    RealtimeSocket.updateDisconnectionState(DisconnectionState.Reconnecting)
-                    StoatAPI.connectWS()
-                }
-                delay(RECONNECT_POLL_MS)
             }
         }
 

@@ -40,17 +40,16 @@ import chat.stoat.api.routes.microservices.autumn.MAX_ATTACHMENTS_PER_MESSAGE
 import chat.stoat.api.routes.microservices.autumn.uploadToAutumn
 import chat.stoat.api.routes.server.fetchMember
 import chat.stoat.api.routes.user.addUserIfUnknown
-import chat.stoat.api.routes.user.fetchUser
 import chat.stoat.api.settings.GeoStateProvider
 import chat.stoat.callbacks.Action
 import chat.stoat.callbacks.ActionChannel
 import chat.stoat.callbacks.UiCallback
 import chat.stoat.callbacks.UiCallbacks
+import chat.stoat.composables.markdown.prose.easyLineBreaks
 import chat.stoat.core.model.schemas.Channel
 import chat.stoat.core.model.schemas.Message
 import chat.stoat.internals.text.MessageProcessor
 import chat.stoat.internals.text.stripPUAChars
-import chat.stoat.composables.markdown.prose.easyLineBreaks
 import chat.stoat.markdown.StoatMarkdownFlavour
 import chat.stoat.persistence.KVStorage
 import chat.stoat.screens.chat.ChatRouterDestination
@@ -58,10 +57,12 @@ import chat.stoat.settings.providers.AgeGateUnlockedStorageProvider
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdownFlow
 import io.ktor.http.ContentType
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
@@ -70,13 +71,22 @@ import kotlinx.coroutines.withContext
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.toJavaInstant
+import logcat.LogPriority
+import logcat.asLog
+import logcat.logcat
 import java.time.ZoneId
+import kotlin.time.Duration.Companion.seconds
 
 class ChannelScreenViewModel(
     private val kvStorage: KVStorage,
 ) : ViewModel() {
+    companion object {
+        private val TYPING_INDICATOR_TIMEOUT = 10.seconds
+    }
+
     var items = mutableStateListOf<ChannelScreenItem>()
     var typingUsers = mutableStateListOf<String>()
+    private val typingExpiryJobs = mutableMapOf<String, Job>()
 
     var channelId by mutableStateOf<String?>(null)
     val channel: Channel?
@@ -98,8 +108,25 @@ class ChannelScreenViewModel(
     var draftReplyTo = mutableStateListOf<SendMessageReply>()
     var attachmentUploadProgress by mutableStateOf(0f)
 
-    var endOfChannel by mutableStateOf(false)
     var didInitialChannelFetch by mutableStateOf(false)
+    var canLoadOlder by mutableStateOf(false)
+        private set
+    var canLoadNewer by mutableStateOf(false)
+        private set
+    var isInitialLoading by mutableStateOf(false)
+        private set
+    var isJumpLoading by mutableStateOf(false)
+        private set
+    var isLoadingOlder by mutableStateOf(false)
+        private set
+    var isLoadingNewer by mutableStateOf(false)
+        private set
+    var hasUnseenNewMessages by mutableStateOf(false)
+        private set
+    var scrollRequest by mutableStateOf<ChannelScrollRequest?>(null)
+        private set
+    var jumpFailure by mutableStateOf<MessageJumpFailure?>(null)
+        private set
 
     var ensuredSelfMember by mutableStateOf(false)
 
@@ -116,19 +143,35 @@ class ChannelScreenViewModel(
         viewModelScope.launch {
             keyboardHeight = kvStorage.getInt("keyboardHeight") ?: 900 // reasonable default for now
         }
+        viewModelScope.launch {
+            listenToWsEvents()
+        }
     }
 
     private var loadMessagesJob: Job? = null
+    private var requestSequence = 0L
 
     fun switchChannel(id: String) {
         // Reset state
         this.loadMessagesJob?.cancel()
+        this.stopTypingJob?.cancel()
+        stopTyping(channelId)
+        clearAllTypingUsers()
+        requestSequence++
         this.channelId = id
         this.items = mutableStateListOf(ChannelScreenItem.Loading)
         this.activePane = ChannelScreenActivePane.None
         this.typingUsers = mutableStateListOf()
-        this.endOfChannel = false
         this.didInitialChannelFetch = false
+        this.canLoadOlder = false
+        this.canLoadNewer = false
+        this.isInitialLoading = true
+        this.isJumpLoading = false
+        this.isLoadingOlder = false
+        this.isLoadingNewer = false
+        this.hasUnseenNewMessages = false
+        this.scrollRequest = null
+        this.jumpFailure = null
         this.ensuredSelfMember = false
         this.denyMessageField = false
         this.denyMessageFieldReasonResource = R.string.typing_blank
@@ -157,7 +200,7 @@ class ChannelScreenViewModel(
             denyMessageFieldIfNeeded()
         }
 
-        this.loadMessages(50, markLastAsRead = true)
+        this.loadLatest(markLastAsRead = true)
     }
 
     suspend fun unlockAgeGate() {
@@ -179,6 +222,31 @@ class ChannelScreenViewModel(
                 ensuredSelfMember = true
             }
         }
+    }
+
+    private fun refreshTypingUser(userId: String) {
+        if (userId == StoatAPI.selfId) return
+
+        if (!typingUsers.contains(userId)) {
+            typingUsers.add(userId)
+        }
+        typingExpiryJobs.remove(userId)?.cancel()
+        typingExpiryJobs[userId] = viewModelScope.launch {
+            delay(TYPING_INDICATOR_TIMEOUT)
+            typingUsers.remove(userId)
+            typingExpiryJobs.remove(userId)
+        }
+    }
+
+    private fun clearTypingUser(userId: String) {
+        typingExpiryJobs.remove(userId)?.cancel()
+        typingUsers.remove(userId)
+    }
+
+    private fun clearAllTypingUsers() {
+        typingExpiryJobs.values.forEach(Job::cancel)
+        typingExpiryJobs.clear()
+        typingUsers.clear()
     }
 
     private suspend fun denyMessageFieldIfNeeded() {
@@ -227,16 +295,19 @@ class ChannelScreenViewModel(
 
     private fun startTyping() {
         if (editingMessage != null) return
+        val targetChannelId = channel?.id ?: return
         if (lastSentBeginTyping != null) {
             val diff = Clock.System.now() - lastSentBeginTyping!!
             if (diff.inWholeSeconds < 1) return
         }
 
         viewModelScope.launch {
-            withContext(StoatAPI.realtimeContext) {
-                channel?.id?.let {
-                    RealtimeSocket.beginTyping(it)
-                }
+            try {
+                RealtimeSocket.beginTyping(targetChannelId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR) { "Failed to begin typing:\n${e.asLog()}" }
             }
         }
 
@@ -247,18 +318,24 @@ class ChannelScreenViewModel(
 
     private fun queueStopTyping() {
         stopTypingJob = viewModelScope.launch {
-            delay(5000)
+            delay(5.seconds)
+            stopTypingJob = null
             stopTyping()
         }
     }
 
-    private fun stopTyping() {
+    private fun stopTyping(targetChannelId: String? = channel?.id) {
+        lastSentBeginTyping = null
         if (editingMessage != null) return
+        if (targetChannelId == null) return
+
         viewModelScope.launch {
-            withContext(StoatAPI.realtimeContext) {
-                channel?.id?.let {
-                    RealtimeSocket.endTyping(it)
-                }
+            try {
+                RealtimeSocket.endTyping(targetChannelId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR) { "Failed to end typing:\n${e.asLog()}" }
             }
         }
     }
@@ -305,13 +382,14 @@ class ChannelScreenViewModel(
             if (!inFence && !inCodeSpan && ch == '@') {
                 when {
                     content.startsWith("everyone", i + 1) &&
-                        (i + 9 >= content.length || !content[i + 9].isLetterOrDigit()) -> {
+                            (i + 9 >= content.length || !content[i + 9].isLetterOrDigit()) -> {
                         sb.append("<@EVERYONE>")
                         i += 9
                         continue
                     }
+
                     content.startsWith("online", i + 1) &&
-                        (i + 7 >= content.length || !content[i + 7].isLetterOrDigit()) -> {
+                            (i + 7 >= content.length || !content[i + 7].isLetterOrDigit()) -> {
                         sb.append("<@ONLINE>")
                         i += 7
                         continue
@@ -341,6 +419,7 @@ class ChannelScreenViewModel(
                 stopTypingJob?.cancel()
                 queueStopTyping()
             } else {
+                stopTypingJob?.cancel()
                 stopTyping()
             }
         }
@@ -413,10 +492,29 @@ class ChannelScreenViewModel(
         //    the original content
         val content = MessageProcessor.processOutgoing(draftContent, channel?.server)
         val replyTo = draftReplyTo.toList()
+        val returnToLatestBeforeRenderingSend = canLoadNewer
 
         // First we upload (the next 5) attachments...
         viewModelScope.launch {
             isSending = true
+            if (returnToLatestBeforeRenderingSend) {
+                loadMessagesJob?.cancel()
+                requestSequence++
+                isJumpLoading = false
+                isLoadingOlder = false
+                isLoadingNewer = false
+                try {
+                    replaceWithLatest(
+                        markLastAsRead = true,
+                        requestScrollToBottom = true,
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logcat(LogPriority.ERROR) { "Failed to return to latest before sending: " + e.asLog() }
+                }
+            }
+
             val attachmentIds = arrayListOf<String>()
             val takenAttachments =
                 this@ChannelScreenViewModel.draftAttachments.take(MAX_ATTACHMENTS_PER_MESSAGE)
@@ -500,144 +598,321 @@ class ChannelScreenViewModel(
         }
     }
 
-    /**
-     * Load messages from the channel. If the channel is switched, the job will be cancelled.
-     *
-     * @param amount The amount of messages to load.
-     * @param before Load [amount] messages before this message ID. Do not use with [around] or [after].
-     * @param after Load [amount] messages after this message ID. Do not use with [around] or [before].
-     * @param around Load [amount] messages around this message ID. Do not use with [before] or [after].
-     * @param ignoreExisting If true, messages that are already in the list will not be added again. Possible performance degradation.
-     */
-    fun loadMessages(
+    private suspend fun fetchMessagePage(
+        channelId: String,
         amount: Int,
         before: String? = null,
         after: String? = null,
-        around: String? = null,
-        ignoreExisting: Boolean = false,
-        markLastAsRead: Boolean = false
-    ) {
-        val currentChannelId = channelId ?: return
-        loadMessagesJob = viewModelScope.launch {
-            try {
-                val messages = arrayListOf<Message>()
+        nearby: String? = null,
+        sort: String? = null,
+    ): List<Message> {
+        val response = fetchMessagesFromChannel(
+            channelId = channelId,
+            limit = amount,
+            includeUsers = true,
+            before = before,
+            after = after,
+            nearby = nearby,
+            sort = sort,
+        )
 
-                fetchMessagesFromChannel(
-                    currentChannelId,
-                    amount,
-                    true,
-                    before,
-                    after,
-                    around
-                ).let {
-                    if (it.messages.isNullOrEmpty() || it.messages!!.size < 50) {
-                        endOfChannel = true
-                    }
-
-                    it.users?.forEach { user ->
-                        if (!StoatAPI.userCache.containsKey(user.id)) {
-                            StoatAPI.userCache[user.id!!] = user
-                        }
-                    }
-
-                    it.messages?.forEach { message ->
-                        addUserIfUnknown(message.author ?: return@forEach)
-                        if (!StoatAPI.messageCache.containsKey(message.id)) {
-                            StoatAPI.messageCache[message.id!!] = message
-                        }
-                        messages.add(message)
-                    }
-
-                    it.members?.forEach { member ->
-                        if (!StoatAPI.members.hasMember(member.id!!.server, member.id!!.user)) {
-                            StoatAPI.members.setMember(member.id!!.server, member)
-                        }
-                    }
-
-                    if (markLastAsRead) {
-                        ackMessage(messages.firstOrNull()?.id ?: return@launch)
-                    }
+        response.users.orEmpty().forEach { user ->
+            user.id?.let { StoatAPI.userCache.putIfAbsent(it, user) }
+        }
+        response.members.orEmpty().forEach { member ->
+            member.id?.let { id ->
+                if (!StoatAPI.members.hasMember(id.server, id.user)) {
+                    StoatAPI.members.setMember(id.server, member)
                 }
-
-                val newItems = messages.filter {
-                    if (ignoreExisting) {
-                        items.none { m ->
-                            when (m) {
-                                is ChannelScreenItem.RegularMessage -> m.message.id == it.id
-                                is ChannelScreenItem.ProspectiveMessage -> m.message.id == it.id
-                                is ChannelScreenItem.SystemMessage -> m.message.id == it.id
-                                is ChannelScreenItem.FailedMessage -> m.message.id == it.id
-                                else -> false
-                            }
-                        }
-                    } else {
-                        true
-                    }
-                }.let { filtered ->
-                    val result = mutableListOf<ChannelScreenItem>()
-                    for (msg in filtered) {
-                        result.add(
-                            when {
-                                msg.system != null -> ChannelScreenItem.SystemMessage(msg)
-                                else -> ChannelScreenItem.RegularMessage(msg, parseAst(msg.content))
-                            }
-                        )
-                    }
-                    result
-                }
-
-                // Place items according to whether above/below/around was specified.
-                // TODO: Aditionally, place LoadTriggers at the beginning and end of the list.
-                val newItemsWithPosition = when {
-                    before != null -> items + newItems
-                    after != null -> newItems + items
-                    // TODO around, which should place the new items in the middle of the list
-                    else -> newItems
-                }
-
-                updateItems(newItemsWithPosition)
-
-                if (!didInitialChannelFetch) {
-                    didInitialChannelFetch = true
-                }
-            } catch (e: Exception) {
-                Log.e("ChannelScreenViewModel", "Failed to fetch messages", e)
             }
         }
+
+        val messages = normalizeByUlid(response.messages.orEmpty()) { it.id }
+        messages.forEach { message ->
+            message.author?.let { addUserIfUnknown(it) }
+            message.id?.let { StoatAPI.messageCache[it] = message }
+        }
+        return messages
+    }
+
+    private suspend fun messagesToItems(messages: Iterable<Message>): List<ChannelScreenItem> =
+        messages.map { message ->
+            if (message.system != null) {
+                ChannelScreenItem.SystemMessage(message)
+            } else {
+                ChannelScreenItem.RegularMessage(message, parseAst(message.content))
+            }
+        }
+
+    private fun loadedMessageIds(): List<String> = items.mapNotNull { it.messageIdOrNull() }
+
+    private suspend fun replaceWithLatest(
+        amount: Int = 50,
+        markLastAsRead: Boolean,
+        requestScrollToBottom: Boolean,
+    ) {
+        val expectedChannelId = channelId ?: return
+        val messages = fetchMessagePage(expectedChannelId, amount)
+        if (channelId != expectedChannelId) return
+
+        updateItems(messagesToItems(messages))
+        canLoadNewer = false
+        canLoadOlder = messages.size >= amount
+        hasUnseenNewMessages = false
+        didInitialChannelFetch = true
+        isInitialLoading = false
+
+        if (markLastAsRead) {
+            messages.firstOrNull()?.id?.let { runCatching { ackMessage(it) } }
+        }
+        if (requestScrollToBottom) {
+            scrollRequest = ChannelScrollRequest.Bottom(++requestSequence)
+        }
+    }
+
+    fun loadLatest(
+        amount: Int = 50,
+        markLastAsRead: Boolean = true,
+        requestScrollToBottom: Boolean = false,
+    ) {
+        loadMessagesJob?.cancel()
+        requestSequence++
+        isJumpLoading = false
+        isLoadingOlder = false
+        isLoadingNewer = false
+        jumpFailure = null
+        isInitialLoading = !didInitialChannelFetch
+        loadMessagesJob = viewModelScope.launch {
+            try {
+                replaceWithLatest(amount, markLastAsRead, requestScrollToBottom)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                isInitialLoading = false
+                logcat(LogPriority.ERROR) { "Failed to fetch latest messages: " + e.asLog() }
+            }
+        }
+    }
+
+    fun loadOlder(amount: Int = 50) {
+        if (!canLoadOlder || isLoadingOlder || isLoadingNewer || isJumpLoading) return
+        val expectedChannelId = channelId ?: return
+        val oldestId = loadedMessageIds().minOrNull() ?: return
+
+        isLoadingOlder = true
+        loadMessagesJob = viewModelScope.launch {
+            try {
+                val messages = fetchMessagePage(
+                    channelId = expectedChannelId,
+                    amount = amount,
+                    before = oldestId,
+                )
+                if (channelId != expectedChannelId) return@launch
+
+                updateItems(items + messagesToItems(messages))
+                canLoadOlder = messages.size >= amount
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR) { "Failed to fetch older messages: " + e.asLog() }
+            } finally {
+                isLoadingOlder = false
+            }
+        }
+    }
+
+    fun loadNewer(amount: Int = 50) {
+        if (!canLoadNewer || isLoadingOlder || isLoadingNewer || isJumpLoading) return
+        val expectedChannelId = channelId ?: return
+        val newestId = loadedMessageIds().maxOrNull() ?: return
+
+        isLoadingNewer = true
+        loadMessagesJob = viewModelScope.launch {
+            try {
+                val messages = fetchMessagePage(
+                    channelId = expectedChannelId,
+                    amount = amount,
+                    after = newestId,
+                    sort = "Oldest",
+                )
+                if (channelId != expectedChannelId) return@launch
+
+                updateItems(items + messagesToItems(messages))
+                canLoadNewer = messages.size >= amount
+                if (!canLoadNewer) {
+                    hasUnseenNewMessages = false
+                    loadedMessageIds().maxOrNull()?.let { runCatching { ackMessage(it) } }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR) { "Failed to fetch newer messages: " + e.asLog() }
+            } finally {
+                isLoadingNewer = false
+            }
+        }
+    }
+
+    fun requestJump(messageId: String, amount: Int = 50) {
+        if (loadedMessageIds().contains(messageId)) {
+            loadMessagesJob?.cancel()
+            isJumpLoading = false
+            isLoadingOlder = false
+            isLoadingNewer = false
+            jumpFailure = null
+            scrollRequest =
+                ChannelScrollRequest.FocusMessage(
+                    messageId = messageId,
+                    animated = true,
+                    requestId = ++requestSequence,
+                )
+            return
+        }
+
+        val expectedChannelId = channelId ?: return
+        loadMessagesJob?.cancel()
+        isLoadingOlder = false
+        isLoadingNewer = false
+        isJumpLoading = true
+        jumpFailure = null
+        val requestId = ++requestSequence
+
+        loadMessagesJob = viewModelScope.launch {
+            try {
+                val messages = fetchMessagePage(
+                    channelId = expectedChannelId,
+                    amount = amount,
+                    nearby = messageId,
+                )
+                if (channelId != expectedChannelId || requestId != requestSequence) return@launch
+                if (messages.none { it.id == messageId }) {
+                    jumpFailure = MessageJumpFailure(messageId, requestId)
+                    return@launch
+                }
+
+                val boundaries = calculateNearbyBoundaries(
+                    messageIds = messages.mapNotNull { it.id },
+                    targetMessageId = messageId,
+                    requestedLimit = amount,
+                )
+                updateItems(messagesToItems(messages))
+                canLoadNewer = boundaries.canLoadNewer
+                canLoadOlder = boundaries.canLoadOlder
+                hasUnseenNewMessages = false
+                didInitialChannelFetch = true
+                scrollRequest = ChannelScrollRequest.FocusMessage(
+                    messageId = messageId,
+                    animated = false,
+                    requestId = requestId,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (channelId == expectedChannelId && requestId == requestSequence) {
+                    jumpFailure = MessageJumpFailure(messageId, requestId)
+                }
+                logcat(LogPriority.ERROR) { "Failed to jump to message: " + e.asLog() }
+            } finally {
+                if (requestId == requestSequence) {
+                    isJumpLoading = false
+                }
+            }
+        }
+    }
+
+    fun consumeScrollRequest(requestId: Long) {
+        if (scrollRequest?.requestId == requestId) scrollRequest = null
+    }
+
+    fun consumeJumpFailure(requestId: Long) {
+        if (jumpFailure?.requestId == requestId) jumpFailure = null
     }
 
     suspend fun ackMessage(messageId: String) {
         ackChannel(channel?.id ?: return, messageId)
     }
 
-    suspend fun listenToWsEvents() {
-        withContext(StoatAPI.realtimeContext) {
-            StoatAPI.wsFrameChannel.onEach {
+    private fun hydrateIncomingMessage(message: MessageFrame, expectedChannelId: String) {
+        val userId = message.author
+        val serverId = channel?.server
+
+        if (userId != null) {
+            viewModelScope.launch {
+                try {
+                    addUserIfUnknown(userId)
+                    if (serverId != null && !StoatAPI.members.hasMember(serverId, userId)) {
+                        fetchMember(serverId, userId)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logcat(LogPriority.ERROR) {
+                        "Failed to hydrate message author:\n${e.asLog()}"
+                    }
+                }
+            }
+        }
+
+        val messageId = message.id
+        if (messageId != null) {
+            viewModelScope.launch {
+                try {
+                    ackChannel(expectedChannelId, messageId)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logcat(LogPriority.ERROR) { "Failed to ack message:\n${e.asLog()}" }
+                }
+            }
+        }
+
+        if (messageId != null && message.system == null && !message.content.isNullOrBlank()) {
+            viewModelScope.launch {
+                val ast = try {
+                    withContext(Dispatchers.Default) { parseAst(message.content) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    logcat(LogPriority.ERROR) {
+                        "Failed to parse incoming message:\n${e.asLog()}"
+                    }
+                    return@launch
+                }
+                if (channelId != expectedChannelId) return@launch
+
+                val index = items.indexOfFirst { item ->
+                    item is ChannelScreenItem.RegularMessage && item.message.id == messageId
+                }
+                val current = items.getOrNull(index) as? ChannelScreenItem.RegularMessage
+                    ?: return@launch
+                if (current.message.content == message.content) {
+                    items[index] = current.copy(mdAst = ast)
+                }
+            }
+        }
+    }
+
+    private suspend fun listenToWsEvents() {
+        StoatAPI.wsFrameChannel.onEach {
+            try {
                 when (it) {
                     is MessageFrame -> {
                         if (it.channel != channel?.id) return@onEach
+                        it.author?.let(::clearTypingUser)
+
                         // If we already have the message we are just catching up on the WebSocket connection. Skip
                         if (items.any { m -> (m is ChannelScreenItem.RegularMessage && m.message.id == it.id) || (m is ChannelScreenItem.SystemMessage && m.message.id == it.id) }) return@onEach
+                        it.id?.let { messageId -> StoatAPI.messageCache[messageId] = it }
 
-                        it.author?.let { userId ->
-                            if (StoatAPI.userCache[userId] == null) {
-                                StoatAPI.userCache[userId] = fetchUser(userId)
-                            }
-                        }
-                        channel?.server?.let { serverId ->
-                            try {
-                                it.author?.let { userId ->
-                                    fetchMember(serverId, userId)
-                                }
-                            } catch (e: Exception) {
-                                Log.e("ChannelScreenViewModel", "Failed to fetch member", e)
-                            }
+                        if (canLoadNewer) {
+                            hasUnseenNewMessages = true
+                            return@onEach
                         }
 
                         if (didInitialChannelFetch) { // this check is so that we don't end up with a message that arrives at the same time as the initial fetch in front of the loading indicator
                             val newItem = when {
                                 it.system != null -> ChannelScreenItem.SystemMessage(it)
-                                else -> ChannelScreenItem.RegularMessage(it, parseAst(it.content))
+                                else -> ChannelScreenItem.RegularMessage(it, null)
                             }
                             updateItems(listOf(newItem) + items.filter { m ->
                                 if (m is ChannelScreenItem.ProspectiveMessage) {
@@ -648,7 +923,7 @@ class ChannelScreenViewModel(
                             })
                         }
 
-                        it.id?.let { mid -> ackMessage(mid) }
+                        hydrateIncomingMessage(it, channel?.id ?: return@onEach)
                     }
 
                     is MessageDeleteFrame -> {
@@ -768,18 +1043,26 @@ class ChannelScreenViewModel(
 
                     is ChannelStartTypingFrame -> {
                         if (it.id != channel?.id) return@onEach
-                        if (typingUsers.contains(it.user)) return@onEach
                         if (it.user == StoatAPI.selfId) return@onEach
 
-                        addUserIfUnknown(it.user)
-                        typingUsers.add(it.user)
+                        refreshTypingUser(it.user)
+                        viewModelScope.launch {
+                            try {
+                                addUserIfUnknown(it.user)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                logcat(LogPriority.ERROR) {
+                                    "Failed to hydrate typing user:\n${e.asLog()}"
+                                }
+                            }
+                        }
                     }
 
                     is ChannelStopTypingFrame -> {
                         if (it.id != channel?.id) return@onEach
-                        if (!typingUsers.contains(it.user)) return@onEach
 
-                        typingUsers.remove(it.user)
+                        clearTypingUser(it.user)
                     }
 
                     is ChannelDeleteFrame -> {
@@ -796,15 +1079,20 @@ class ChannelScreenViewModel(
 
                     is RealtimeSocketFrames.Reconnected -> {
                         Log.d("ChannelScreen", "Reconnected to WS.")
-                        loadMessages(50, ignoreExisting = true)
-                        typingUsers.clear()
-                        listenToWsEvents()
+                        if (canLoadNewer) {
+                            hasUnseenNewMessages = true
+                        } else {
+                            loadLatest(markLastAsRead = true)
+                        }
+                        clearAllTypingUsers()
                     }
                 }
-            }.catch {
-                Log.e("ChannelScreen", "Failed to receive WS frame", it)
-            }.launchIn(this)
-        }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR) { "Failed to receive WS frame:\n${e.asLog()}" }
+            }
+        }.collect()
     }
 
     suspend fun listenToUiCallbacks() {
@@ -861,7 +1149,7 @@ class ChannelScreenViewModel(
 
     private suspend fun updateItems(newItems: List<ChannelScreenItem>) {
         // Spec https://wiki.rvlt.gg/index.php/Text_Channel_(UI)#Message_Grouping_Algorithm
-        val innerItems = newItems.toMutableStateList()
+        val innerItems = normalizeByUlid(newItems) { it.messageIdOrNull() }.toMutableStateList()
         // Let L be the list of messages ordered from newest to oldest
         val allItemsThatAreMessages =
             innerItems.filterIsInstance<ChannelScreenItem.RegularMessage>()
