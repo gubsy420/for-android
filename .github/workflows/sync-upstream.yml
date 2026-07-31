@@ -173,7 +173,17 @@ jobs:
           ./gradlew --no-daemon :core:model:compileDebugKotlin :app:compileDebugKotlin
 
       - name: Push resolved merge
-        run: git push origin "$FORK_BRANCH"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # claude-code-action mints a short-lived GitHub App token, points git's
+          # stored credential (http.<host>.extraheader) at it, then REVOKES that
+          # token when its step ends. Any later `git push origin` then authenticates
+          # with the dead token -> "Invalid username or token". Clear that stale
+          # credential and push with the workflow's own GITHUB_TOKEN via an explicit
+          # URL, so the push does not depend on the leftover git auth state.
+          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:${FORK_BRANCH}"
 
       - name: Post resolution summary issue
         env:
@@ -200,11 +210,15 @@ jobs:
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
+          # Same stale-credential problem as the push step above: clear the extraheader
+          # claude-code-action left behind and push via an explicit authenticated URL.
+          git config --local --unset-all http.https://github.com/.extraheader 2>/dev/null || true
           git merge --abort 2>/dev/null || true
           git reset --hard "origin/$FORK_BRANCH"
           git checkout -B upstream-sync "upstream/$UPSTREAM_BRANCH"
-          git push -f origin upstream-sync
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" upstream-sync
 
           # The head must be qualified with the fork owner. upstream-sync tracks
           # upstream/dev (stoatchat's repo), so an unqualified --head lets gh infer
