@@ -65,10 +65,10 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         // Fork change: monotonic versionCode so consecutive fork builds are seen as
         // proper updates. Derived from the CI run number; falls back to the base
-        // locally.
-        versionCode = Integer.parseInt("001_007_000".replace("_", ""), 10) +
+        // locally. Base tracks upstream's versionCode.
+        versionCode = Integer.parseInt("001_007_001".replace("_", ""), 10) +
                 (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
-        versionName = "1.7.0"
+        versionName = "1.7.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -233,7 +233,6 @@ dependencies {
     implementation(libs.android.palette)
     implementation(libs.android.core.telecom)
     implementation(libs.android.core.splashscreen)
-    implementation(libs.android.constraintlayout)
     implementation(libs.android.constraintlayout.compose)
     implementation(libs.android.appcompat)
     implementation(libs.android.material)

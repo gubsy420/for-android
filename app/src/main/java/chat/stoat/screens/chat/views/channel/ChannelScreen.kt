@@ -6,6 +6,7 @@ import android.content.ContentValues
 import android.content.res.Configuration
 import android.net.Uri
 import android.os.Environment
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.DisplayMetrics
 import android.util.Log
@@ -92,6 +93,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -239,6 +241,36 @@ fun ChannelScreen(
     // </editor-fold>
     // <editor-fold desc="Load/switch channel">
     val channelPermissions by rememberChannelPermissions(channelId, viewModel.ensuredSelfMember)
+    val slowmodeSeconds = StoatAPI.channelCache[channelId]?.slowmode?.takeIf { it > 0 }
+    val slowmodeEnabled = slowmodeSeconds != null
+    val slowmodeImmune = channelPermissions has PermissionBit.BypassSlowmode
+    val activeSlowmode = StoatAPI.userSlowmodeCache[channelId]
+    var slowmodeNowMilliseconds by remember(channelId, activeSlowmode?.expiresAtMilliseconds) {
+        mutableLongStateOf(SystemClock.elapsedRealtime())
+    }
+
+    LaunchedEffect(
+        channelId,
+        activeSlowmode?.expiresAtMilliseconds,
+        slowmodeEnabled,
+        slowmodeImmune,
+    ) {
+        if (!slowmodeEnabled || slowmodeImmune || activeSlowmode == null) {
+            return@LaunchedEffect
+        }
+
+        while (true) {
+            slowmodeNowMilliseconds = SystemClock.elapsedRealtime()
+            if (activeSlowmode.remainingSeconds(slowmodeNowMilliseconds) <= 0) break
+
+            delay(1_000)
+        }
+    }
+
+    val slowmodeRemainingSeconds =
+        activeSlowmode?.remainingSeconds(slowmodeNowMilliseconds) ?: 0
+    val slowmodeActive =
+        slowmodeEnabled && !slowmodeImmune && slowmodeRemainingSeconds > 0
 
     LaunchedEffect(channelId) {
         viewModel.switchChannel(channelId)
@@ -439,7 +471,7 @@ fun ChannelScreen(
     }
 
     val scrollDownFABPadding by animateDpAsState(
-        if (viewModel.typingUsers.isNotEmpty()) 25.dp else 0.dp,
+        if (viewModel.typingUsers.isNotEmpty() || slowmodeEnabled) 25.dp else 0.dp,
         animationSpec = StoatTweenDp,
         label = "ScrollDownFABPadding"
     )
@@ -488,22 +520,40 @@ fun ChannelScreen(
                     val visibleItemsBeforeJump = lazyListState.layoutInfo.visibleItemsInfo
                     val targetIsVisible = visibleItemsBeforeJump
                         .any { it.key == request.messageId }
+                    val targetWasAboveViewport =
+                        visibleItemsBeforeJump.isNotEmpty() &&
+                                lazyItemIndex > visibleItemsBeforeJump.maxOf { it.index }
                     if (!targetIsVisible) {
                         // Off-screen lazy items must be measured before exact centering
                         // so we snap the target into the viewport, then animate the centering distance
                         lazyListState.scrollToItem(lazyItemIndex)
                     }
-                    val target = checkNotNull(
+                    var target = checkNotNull(
                         snapshotFlow {
                             lazyListState.layoutInfo.visibleItemsInfo
                                 .firstOrNull { it.key == request.messageId }
                         }.first { it != null }
                     )
-                    val viewportCenter =
+                    var viewportCenter =
                         (lazyListState.layoutInfo.viewportStartOffset +
                                 lazyListState.layoutInfo.viewportEndOffset) / 2
-                    val targetCenter = target.offset + target.size / 2
-                    val centerOffset = (targetCenter - viewportCenter).toFloat()
+                    var targetCenter = target.offset + target.size / 2
+                    var centerOffset = (targetCenter - viewportCenter).toFloat()
+                    if (request.animated && !targetIsVisible && targetWasAboveViewport) {
+                        // scrollToItem anchors at the bottom in this reversed list. Here we mirror
+                        // an older target to the top so its centering animation comes from the same
+                        // side of the viewport where the message was located.
+                        lazyListState.scrollBy(centerOffset * 2)
+                        target = checkNotNull(
+                            lazyListState.layoutInfo.visibleItemsInfo
+                                .firstOrNull { it.key == request.messageId }
+                        )
+                        viewportCenter =
+                            (lazyListState.layoutInfo.viewportStartOffset +
+                                    lazyListState.layoutInfo.viewportEndOffset) / 2
+                        targetCenter = target.offset + target.size / 2
+                        centerOffset = (targetCenter - viewportCenter).toFloat()
+                    }
                     if (request.animated) {
                         lazyListState.animateScrollBy(
                             value = centerOffset,
@@ -1018,7 +1068,10 @@ fun ChannelScreen(
                                 )
                                 TypingIndicator(
                                     users = viewModel.typingUsers,
-                                    serverId = viewModel.channel?.server
+                                    serverId = viewModel.channel?.server,
+                                    slowmodeSeconds = slowmodeSeconds,
+                                    slowmodeRemainingSeconds = slowmodeRemainingSeconds,
+                                    slowmodeImmune = slowmodeImmune,
                                 )
                             }
 
@@ -1303,6 +1356,8 @@ fun ChannelScreen(
                                             channelId = channelId,
                                             failedValidation = viewModel.draftContent.length > 2000,
                                             valueIsBlank = viewModel.draftContent.isBlank(),
+                                            sendEnabled =
+                                                viewModel.editingMessage != null || !slowmodeActive,
                                             cancelEdit = {
                                                 viewModel.editingMessage = null
                                                 viewModel.putDraftContent("", true)

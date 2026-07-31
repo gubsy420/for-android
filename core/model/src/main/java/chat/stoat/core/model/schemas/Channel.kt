@@ -35,6 +35,7 @@ data class Member(
     val avatar: AutumnResource? = null,
     val roles: List<String>? = null,
     val nickname: String? = null,
+    val pronouns: String? = null,
 
     val timeout: String? = null
 ) {
@@ -45,6 +46,7 @@ data class Member(
             avatar = other.avatar ?: avatar,
             roles = other.roles ?: roles,
             nickname = other.nickname ?: nickname,
+            pronouns = other.pronouns ?: pronouns,
             timeout = other.timeout ?: timeout
         )
     }
@@ -77,6 +79,7 @@ data class Channel(
     val defaultPermissions: PermissionDescription? = null,
     val nsfw: Boolean? = null,
     val voice: JsonElement? = null,
+    val slowmode: Long? = null,
     val type: String? = null // this is _only_ used for websocket events!
 ) {
     fun mergeWithPartial(partial: Channel): Channel {
@@ -96,10 +99,20 @@ data class Channel(
             rolePermissions = partial.rolePermissions ?: rolePermissions,
             defaultPermissions = partial.defaultPermissions ?: defaultPermissions,
             nsfw = partial.nsfw ?: nsfw,
+            slowmode = partial.slowmode ?: slowmode,
             type = partial.type ?: type
         )
     }
 }
+
+@Serializable
+data class ChannelSlowmode(
+    @SerialName("channel_id")
+    val channelId: String,
+    val duration: Long,
+    @SerialName("retry_after")
+    val retryAfter: Long
+)
 
 @Serializable
 enum class ChannelType(val value: String) {

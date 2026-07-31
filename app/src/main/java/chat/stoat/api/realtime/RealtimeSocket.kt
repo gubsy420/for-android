@@ -1,11 +1,13 @@
 package chat.stoat.api.realtime
 
+import android.os.SystemClock
 import android.util.Log
 import androidx.compose.runtime.mutableStateOf
 import chat.stoat.StoatApplication
 import chat.stoat.api.StoatAPI
 import chat.stoat.api.StoatHttp
 import chat.stoat.api.StoatJson
+import chat.stoat.api.internals.ActiveSlowmode
 import chat.stoat.api.realtime.frames.receivable.AnyFrame
 import chat.stoat.api.realtime.frames.receivable.BulkFrame
 import chat.stoat.api.realtime.frames.receivable.ChannelAckFrame
@@ -30,6 +32,7 @@ import chat.stoat.api.realtime.frames.receivable.ServerRoleUpdateFrame
 import chat.stoat.api.realtime.frames.receivable.ServerUpdateFrame
 import chat.stoat.api.realtime.frames.receivable.UserMoveVoiceChannelFrame
 import chat.stoat.api.realtime.frames.receivable.UserRelationshipFrame
+import chat.stoat.api.realtime.frames.receivable.UserSlowmodesFrame
 import chat.stoat.api.realtime.frames.receivable.UserUpdateFrame
 import chat.stoat.api.realtime.frames.receivable.UserVoiceStateUpdateFrame
 import chat.stoat.api.realtime.frames.receivable.VoiceChannelJoinFrame
@@ -176,6 +179,7 @@ object RealtimeSocket {
 
             "Ready" -> {
                 val readyFrame = StoatJson.decodeFromString(ReadyFrame.serializer(), rawFrame)
+                StoatAPI.userSlowmodeCache.clear()
 
                 logcat {
                     "Received ready frame with ${readyFrame.users.size} users, " +
@@ -474,15 +478,17 @@ object RealtimeSocket {
                 val existing = StoatAPI.userCache[userUpdateFrame.id]
                     ?: return // if we don't have the user no point in updating it
 
-                if (userUpdateFrame.clear != null) {
-                    if (userUpdateFrame.clear.contains("Avatar")) {
-                        StoatAPI.userCache[userUpdateFrame.id] =
-                            existing.copy(avatar = null)
+                var updated = existing.mergeWithPartial(userUpdateFrame.data)
+
+                userUpdateFrame.clear?.forEach {
+                    updated = when (it) {
+                        "Avatar" -> updated.copy(avatar = null)
+                        "Pronouns" -> updated.copy(pronouns = null)
+                        else -> updated
                     }
                 }
 
-                StoatAPI.userCache[userUpdateFrame.id] =
-                    existing.mergeWithPartial(userUpdateFrame.data)
+                StoatAPI.userCache[userUpdateFrame.id] = updated
             }
 
             "UserRelationship" -> {
@@ -513,8 +519,15 @@ object RealtimeSocket {
                 val existing = StoatAPI.channelCache[channelUpdateFrame.id]
                     ?: return // if we don't have the channel no point in updating it
 
-                val combined = existing.mergeWithPartial(channelUpdateFrame.data)
+                var combined = existing.mergeWithPartial(channelUpdateFrame.data)
+                if ("Slowmode" in channelUpdateFrame.clear.orEmpty()) {
+                    combined = combined.copy(slowmode = null)
+                }
+
                 StoatAPI.channelCache[channelUpdateFrame.id] = combined
+                if ((combined.slowmode ?: 0) <= 0) {
+                    StoatAPI.userSlowmodeCache.remove(channelUpdateFrame.id)
+                }
 
                 database.channelQueries.upsert(
                     channelUpdateFrame.id,
@@ -576,6 +589,7 @@ object RealtimeSocket {
                 }
 
                 StoatAPI.channelCache.remove(channelDeleteFrame.id)
+                StoatAPI.userSlowmodeCache.remove(channelDeleteFrame.id)
                 database.channelQueries.delete(channelDeleteFrame.id)
 
                 if (currentChannel.server != null) {
@@ -607,6 +621,17 @@ object RealtimeSocket {
                 )
 
                 StoatAPI.unreads.processExternalAck(channelAckFrame.id, channelAckFrame.messageId)
+            }
+
+            "UserSlowmodes" -> {
+                val userSlowmodesFrame =
+                    StoatJson.decodeFromString(UserSlowmodesFrame.serializer(), rawFrame)
+                val receivedAt = SystemClock.elapsedRealtime()
+
+                userSlowmodesFrame.slowmodes.forEach { slowmode ->
+                    StoatAPI.userSlowmodeCache[slowmode.channelId] =
+                        ActiveSlowmode.from(slowmode, receivedAt)
+                }
             }
 
             "ServerCreate" -> {
@@ -733,6 +758,7 @@ object RealtimeSocket {
                     when (it) {
                         "Avatar" -> updated = updated.copy(avatar = null)
                         "Nickname" -> updated = updated.copy(nickname = null)
+                        "Pronouns" -> updated = updated.copy(pronouns = null)
                         else -> Log.e("RealtimeSocket", "Unknown server member clear field: $it")
                     }
                 }

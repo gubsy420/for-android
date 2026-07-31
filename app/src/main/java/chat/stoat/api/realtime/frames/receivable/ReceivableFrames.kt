@@ -1,6 +1,7 @@
 package chat.stoat.api.realtime.frames.receivable
 
 import chat.stoat.core.model.schemas.Channel
+import chat.stoat.core.model.schemas.ChannelSlowmode
 import chat.stoat.core.model.util.ChannelVoiceState
 import chat.stoat.core.model.schemas.Embed
 import chat.stoat.core.model.schemas.Emoji
@@ -160,6 +161,12 @@ data class ChannelAckFrame(
 )
 
 @Serializable
+data class UserSlowmodesFrame(
+    val type: String = "UserSlowmodes",
+    val slowmodes: List<ChannelSlowmode>,
+)
+
+@Serializable
 data class ServerCreateFrame(
     val type: String = "ServerCreate",
     val id: String,
@@ -226,7 +233,7 @@ data class UserUpdateFrame(
     val type: String = "UserUpdate",
     val id: String,
     val data: User,
-    val clear: List<String>? = null // "ProfileContent", "ProfileBackground", "StatusText" or "Avatar"
+    val clear: List<String>? = null
 )
 
 @Serializable
