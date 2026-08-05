@@ -66,9 +66,9 @@ android {
         // Fork change: monotonic versionCode so consecutive fork builds are seen as
         // proper updates. Derived from the CI run number; falls back to the base
         // locally. Base tracks upstream's versionCode.
-        versionCode = Integer.parseInt("001_007_001".replace("_", ""), 10) +
+        versionCode = Integer.parseInt("001_007_002".replace("_", ""), 10) +
                 (System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 0)
-        versionName = "1.7.1"
+        versionName = "1.7.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
