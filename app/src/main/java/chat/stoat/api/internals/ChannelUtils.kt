@@ -54,7 +54,15 @@ object ChannelUtils {
         val categories =
             server.categories?.map { CategorisedChannelList.Category(it) } ?: emptyList()
         categories.forEach {
-            output.add(it)
+            // Match the web/desktop clients: the special "default" category (which
+            // holds uncategorised channels) is rendered without a heading. Its title
+            // is literally "Default", so emitting it here produces a phantom
+            // top-level heading the other clients hide — the web ServerSidebar only
+            // shows a title `when id !== "default"`, and the SDK's orderedChannels
+            // drops the category entirely when it is empty.
+            if (it.category.id != "default") {
+                output.add(it)
+            }
             val channels = it.category.channels?.mapNotNull { c ->
                 StoatAPI.channelCache[c]?.let { it1 ->
                     CategorisedChannelList.Channel(it1)
